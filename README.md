@@ -168,6 +168,12 @@ Desktop behaviour:
 > CallKit-style accept/decline actions. Use your app's own audio and UI layer,
 > and treat the notification as advisory.
 
+> [!NOTE]
+> The call registry and event stream are identical on all three desktop
+> platforms, but the notification layer is native per OS. Build and
+> smoke-test Windows and Linux on their own operating systems; a macOS host
+> cannot compile or run those desktop targets.
+
 ### 3. Usage
 
 #### Import
