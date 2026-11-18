@@ -38,6 +38,7 @@ Our top sponsors are shown below!
   - [3. Usage](#3-usage)
 - [🔔 Call notification delegate (desktop and web)](#-call-notification-delegate-desktop-and-web)
 - [🌐 Web (including WASM)](#-web-including-wasm)
+- [🔔 Host-owned call notifications with flutter_local_notifications](#-host-owned-call-notifications-with-flutter_local_notifications)
 - [📋 Properties](#-properties)
 - [📱 Pushkit Setup](#-pushkit---received-voip-and-wake-app-from-terminated-state-ios-only)
 - [🎯 Demo](#-demo)
@@ -943,6 +944,127 @@ FlutterCallkitIncomingWeb.isRegistered;
 - Call state is per page load and is not shared between tabs.
 - Web push is not implemented. Deliver the call with your own transport (for
   example FCM for web) and call `showCallkitIncoming` when a message arrives.
+
+## 🔔 Host-owned call notifications with flutter_local_notifications
+
+The plugin does not depend on a notification package. The example ships a
+production-oriented adapter,
+[flutter_local_notifications_callkit_delegate.dart](example/lib/notifications/flutter_local_notifications_callkit_delegate.dart),
+that implements `CallkitNotificationDelegate` with
+[`flutter_local_notifications`](https://pub.dev/packages/flutter_local_notifications)
+23.x. It is application code: copy it into your app (or a shared package) and
+add the dependency to **your app**, not to `flutter_callkit_incoming`.
+
+### Setup
+
+Add the dependency to the application `pubspec.yaml`:
+
+```yaml
+dependencies:
+  flutter_local_notifications: ^23.0.3
+  # Any Flutter app that uses a web plugin needs this SDK dependency;
+  # flutter_local_notifications_web itself does not declare it.
+  flutter_web_plugins:
+    sdk: flutter
+```
+
+Create and initialize the delegate, request permission from a user gesture,
+and listen to the actions it reports:
+
+```dart
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+
+// Copy the adapter from example/lib/notifications/ into your app.
+import 'notifications/flutter_local_notifications_callkit_delegate.dart';
+
+final delegate = FlutterLocalNotificationsCallkitDelegate(
+  appName: 'My app',
+  windowsAppUserModelId: 'com.example.myapp',
+  windowsGuid: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+);
+
+await delegate.initialize();          // never prompts by itself
+await delegate.requestPermissions();  // call from a user gesture
+
+// Once the host hook is available (the example is self-contained until then):
+// FlutterCallkitIncoming.setNotificationDelegate(delegate);
+
+delegate.actions.listen((action) async {
+  switch (action.type) {
+    case CallkitNotificationActionType.accept:
+      await FlutterCallkitIncoming.setCallConnected(action.callId);
+    case CallkitNotificationActionType.decline:
+    case CallkitNotificationActionType.end:
+      await FlutterCallkitIncoming.endCall(action.callId);
+    case CallkitNotificationActionType.click:
+      // Bring the app / call screen to the front.
+      break;
+  }
+});
+
+await delegate.showIncoming(
+  const CallkitNotificationCall(
+    callId: 'call-1',
+    callerName: 'Alice',
+    handle: 'alice@example.com',
+  ),
+);
+```
+
+`initialize()` builds `AndroidInitializationSettings`,
+`DarwinInitializationSettings` (iOS/macOS),
+`LinuxInitializationSettings`, `WindowsInitializationSettings` and
+`WebInitializationSettings`. It does not request permissions. The delegate
+implements `showIncoming`, `showMissed`, `cancel` and `cancelAll` from the
+contract, puts `callId` and the action into the notification payload, and maps
+notification taps, accept, decline, end and dismissal back to `actions`.
+
+### Platform notes
+
+| Platform | Initialization | Permission helper | Actions |
+|----------|----------------|-------------------|---------|
+| Android | `AndroidInitializationSettings` | `POST_NOTIFICATIONS` on API 33+; `requestFullScreenIntentPermission()` for Android 14+ | Accept/decline actions; the native CallKit-style screen remains the default on mobile. |
+| iOS | `DarwinInitializationSettings` | Alert, badge and sound permissions | Notification category with Accept/Decline; categories are cached per install. |
+| macOS | `DarwinInitializationSettings` | Alert, badge and sound permissions | Notification category with Accept/Decline. |
+| Linux | `LinuxInitializationSettings` | No runtime prompt | Freedesktop actions where the notification daemon supports them; critical urgency for ringing calls. |
+| Windows | `WindowsInitializationSettings` | No runtime prompt | `incomingCall` toast scenario with Accept/Decline buttons; requires a stable AppUserModelID and activation GUID. |
+| Web | `WebInitializationSettings` | `requestNotificationsPermission()` from a user gesture | Actions in Chromium-based browsers; Firefox/Safari ignore them. |
+
+- **Web**: the page must be served from HTTPS or localhost. The plugin
+  registers a service worker from
+  `assets/packages/flutter_local_notifications_web/web/notifications_service_worker.js`,
+  so keep the web build's asset bundling enabled. Both JavaScript and
+  `--wasm` builds are supported. Call `requestPermissions()` from a click
+  handler; browsers may reject prompts that are not tied to a user gesture.
+- **iOS/macOS**: the notification category actions are installed once per app
+  install. If you change the labels or the action set, bump
+  `notificationCategoryId` (the adapter defaults to
+  `callkit_incoming_call_v1`) or users will keep the old actions until the
+  app is reinstalled.
+- **Android**: notification channels are immutable after creation. Changing
+  importance, sound or vibration requires a new channel id. Full-screen
+  incoming-call notifications also need `USE_FULL_SCREEN_INTENT` on Android
+  14+; the example keeps using the plugin's native call screen on mobile.
+- **Windows**: toast activation is registered through the AppUserModelID and
+  GUID passed to the delegate. Use values that belong to your app and keep the
+  GUID stable across releases. The adapter encodes the action into each
+  button's arguments because Windows activation does not expose the action id
+  separately.
+- **Linux**: requires a running notification daemon (libnotify/D-Bus). Action
+  support depends on the daemon; servers that do not support actions still
+  show the notification and report a body click as `click`.
+- `cancel(callId)` removes that call's notification. `cancelAll()` only
+  removes notifications carrying this adapter's payload; it does not call
+  `FlutterLocalNotificationsPlugin.cancelAll()` and therefore leaves unrelated
+  app notifications alone. After a process restart the adapter rediscovers
+  active call notifications from their payload on platforms that implement
+  `getActiveNotifications()`; Linux does not, so cancel ringing calls before
+  the process exits there.
+
+See
+[notifications_demo_page.dart](example/lib/notifications/notifications_demo_page.dart)
+for a self-contained demo (permission request, incoming/video/missed calls,
+cancel and action logging).
 
 ## 📋 Properties
 

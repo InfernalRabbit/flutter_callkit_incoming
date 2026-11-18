@@ -7,6 +7,7 @@ import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming_example/app_router.dart';
 import 'package:flutter_callkit_incoming_example/navigation_service.dart';
+import 'package:flutter_callkit_incoming_example/notifications/flutter_local_notifications_callkit_delegate.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 
@@ -66,13 +67,34 @@ Future<void> showCallkitIncoming(String uuid) async {
   await FlutterCallkitIncoming.showCallkitIncoming(params);
 }
 
-void main() {
+/// Self-contained notification delegate used by the demo page.
+///
+/// It is created here so the example can use it directly. When the plugin's
+/// notification host hook is available, install it with:
+///
+/// ```dart
+/// FlutterCallkitIncoming.setNotificationDelegate(callkitNotifications);
+/// ```
+final FlutterLocalNotificationsCallkitDelegate callkitNotifications =
+    FlutterLocalNotificationsCallkitDelegate(
+  appName: 'Callkit',
+  windowsAppUserModelId: 'com.example.flutter_callkit_incoming_example',
+  windowsGuid: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+  linuxDefaultActionName: 'Open call',
+);
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
+  // Does not prompt for permissions; call requestPermissions() from a user
+  // gesture (the demo page does that).
+  await callkitNotifications.initialize();
+  runApp(MyApp(notificationDelegate: callkitNotifications));
 }
 
 class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+  const MyApp({super.key, this.notificationDelegate});
+
+  final FlutterLocalNotificationsCallkitDelegate? notificationDelegate;
 
   @override
   MyAppState createState() => MyAppState();
@@ -161,7 +183,10 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MaterialApp(
       theme: ThemeData.light(),
-      onGenerateRoute: AppRoute.generateRoute,
+      onGenerateRoute: (RouteSettings settings) => AppRoute.generateRoute(
+        settings,
+        notificationDelegate: widget.notificationDelegate,
+      ),
       initialRoute: AppRoute.homePage,
       navigatorKey: NavigationService.instance.navigationKey,
       navigatorObservers: <NavigatorObserver>[NavigationService.instance.routeObserver],

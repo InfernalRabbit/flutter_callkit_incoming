@@ -9,11 +9,14 @@ import 'package:flutter_callkit_incoming/entities/notification_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming_example/app_router.dart';
 import 'package:flutter_callkit_incoming_example/navigation_service.dart';
+import 'package:flutter_callkit_incoming_example/notifications/flutter_local_notifications_callkit_delegate.dart';
 import 'package:http/http.dart';
 import 'package:uuid/uuid.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  const HomePage({super.key, this.notificationDelegate});
+
+  final FlutterLocalNotificationsCallkitDelegate? notificationDelegate;
 
   @override
   State<StatefulWidget> createState() {
@@ -73,6 +76,15 @@ class HomePageState extends State<HomePage> {
                   label: Text('End all calls'),
                   onPressed: endAllCalls,
                 ),
+                if (widget.notificationDelegate != null)
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.notifications_active),
+                    label: const Text('Call notification delegate demo'),
+                    onPressed: () =>
+                        NavigationService.instance.pushNamedIfNotCurrent(
+                      AppRoute.notificationsPage,
+                    ),
+                  ),
                 const Divider(),
               ],
             ),

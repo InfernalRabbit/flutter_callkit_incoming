@@ -8,6 +8,13 @@
 * Removed the `local_notifier` and `web` package dependencies. Android and iOS keep using their native notification implementations unchanged.
 * Tests updated to install a fake delegate; added coverage for the dispatcher, the public delegate API, desktop action mapping and the headless (no delegate) path.
 
+### Host-owned call notifications: flutter_local_notifications adapter (example)
+* Added `example/lib/notifications/flutter_local_notifications_callkit_delegate.dart`, a production-oriented `CallkitNotificationDelegate` implementation for `flutter_local_notifications` 23.x. It initializes Android, Darwin (iOS/macOS), Linux, Windows and web settings, provides a permission helper, configures Accept/Decline actions and categories where the platform supports them, stores `callId`/`action` in the payload and maps responses (including dismissal) back to the delegate action stream. `cancel`/`cancelAll` remove only call notifications created by the adapter.
+* Added `example/lib/notifications/notifications_demo_page.dart` and wired it from the example home page. The demo is self-contained: it calls the delegate directly and logs actions; the one-line `FlutterCallkitIncoming.setNotificationDelegate(delegate)` installation is documented for when the host hook is available.
+* Added adapter tests for payload round-tripping, malformed/foreign payload rejection, click/accept/decline/end/dismiss mapping, early-action buffering and per-platform initialization settings.
+* Example-only dependencies: `flutter_local_notifications: ^23.0.3` and `flutter_web_plugins`. The plugin's own runtime dependencies are unchanged.
+* Documented platform permission requirements and differences: Android `POST_NOTIFICATIONS` / full-screen intent and immutable channels, iOS/macOS cached notification categories, Linux notification-daemon actions, Windows AppUserModelID/GUID activation, and web service-worker/secure-context/Chromium-actions behavior plus the `flutter_web_plugins` registrant requirement for web/WASM builds.
+
 ### Desktop support (macOS / Windows / Linux)
 * Added a Dart-only desktop implementation registered through `dartPluginClass` for macOS, Windows and Linux. The existing Android/iOS MethodChannel implementations are unchanged.
 * Added desktop implementations of `showCallkitIncoming`, `startCall`, `endCall`, `endAllCalls`, `activeCalls`, `setCallConnected`, `muteCall`/`isMuted`, `holdCall`, `hideCallkitIncoming`, `showMissCallNotification`, `silenceEvents`/`unsilenceEvents` and `onEvent`, backed by an in-memory call registry.
