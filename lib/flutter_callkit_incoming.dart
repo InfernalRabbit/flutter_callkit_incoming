@@ -6,12 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'entities/entities.dart';
+import 'src/notifications/callkit_notification_delegate.dart';
 import 'src/desktop/callkit_desktop_factory.dart';
 import 'src/desktop/callkit_desktop_platform.dart';
 
 // Flutter's generated desktop plugin registrant looks up
 // FlutterCallkitIncomingDesktop on this library.
 export 'src/desktop/registration.dart';
+export 'src/notifications/callkit_notification_delegate.dart';
 
 /// Instance to use library functions.
 /// * showCallkitIncoming(dynamic)
