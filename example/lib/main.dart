@@ -88,6 +88,7 @@ Future<void> main() async {
   // Does not prompt for permissions; call requestPermissions() from a user
   // gesture (the demo page does that).
   await callkitNotifications.initialize();
+  FlutterCallkitIncoming.setNotificationDelegate(callkitNotifications);
   runApp(MyApp(notificationDelegate: callkitNotifications));
 }
 
