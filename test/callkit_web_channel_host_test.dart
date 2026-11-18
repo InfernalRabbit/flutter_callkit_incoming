@@ -1,27 +1,33 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
+import 'package:flutter_callkit_incoming/src/notifications/callkit_notification_dispatcher.dart';
 import 'package:flutter_callkit_incoming/src/web/callkit_web_channel_host.dart';
 import 'package:flutter_callkit_incoming/src/web/callkit_web_engine.dart';
-import 'package:flutter_callkit_incoming/src/web/callkit_web_notification_bridge.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'fake_notification_delegate.dart';
 
 void main() {
   const StandardMethodCodec codec = StandardMethodCodec();
   late FakePlatformMessenger messenger;
-  late FakeNotificationBridge bridge;
+  late FakeCallkitNotificationDelegate delegate;
+  late CallkitNotificationDispatcher dispatcher;
   late CallkitWebChannelHost host;
 
   setUp(() {
     messenger = FakePlatformMessenger();
-    bridge = FakeNotificationBridge();
+    delegate = FakeCallkitNotificationDelegate();
+    dispatcher = CallkitNotificationDispatcher(delegate: delegate);
     host = CallkitWebChannelHost(
       messenger: messenger,
-      engine: CallkitWebEngine(notificationBridge: bridge),
+      engine: CallkitWebEngine(notifications: dispatcher),
     );
   });
 
-  tearDown(() {
+  tearDown(() async {
     host.dispose();
+    await dispatcher.dispose();
+    await delegate.dispose();
   });
 
   Future<dynamic> invoke(String method, [dynamic arguments]) async {
@@ -255,45 +261,5 @@ class FakePlatformMessenger implements BinaryMessenger {
   ) async {
     final ByteData? response = await deliver(channel, data);
     callback?.call(response);
-  }
-}
-
-class FakeNotificationBridge implements CallkitWebNotificationBridge {
-  final Map<String, CallkitWebNotification> shown =
-      <String, CallkitWebNotification>{};
-
-  @override
-  bool get isSupported => true;
-
-  @override
-  bool get isSecureContext => true;
-
-  @override
-  String get permission => 'granted';
-
-  @override
-  bool get isPermissionGranted => true;
-
-  @override
-  Future<String> requestPermission() async => 'granted';
-
-  @override
-  Future<bool> show(
-    CallkitWebNotification notification, {
-    void Function()? onClick,
-    void Function()? onDismiss,
-  }) async {
-    shown[notification.id] = notification;
-    return true;
-  }
-
-  @override
-  Future<void> close(String id) async {
-    shown.remove(id);
-  }
-
-  @override
-  Future<void> closeAll() async {
-    shown.clear();
   }
 }

@@ -36,6 +36,7 @@ Our top sponsors are shown below!
     - [Swift Package Manager (SPM) Support](#swift-package-manager-spm-support-flutter-324)
     - [Desktop (macOS / Windows / Linux)](#desktop-macos--windows--linux)
   - [3. Usage](#3-usage)
+- [🔔 Call notification delegate (desktop and web)](#-call-notification-delegate-desktop-and-web)
 - [🌐 Web (including WASM)](#-web-including-wasm)
 - [📋 Properties](#-properties)
 - [📱 Pushkit Setup](#-pushkit---received-voip-and-wake-app-from-terminated-state-ios-only)
@@ -47,8 +48,8 @@ Our top sponsors are shown below!
 - Start an outgoing call
 - Custom UI Android/Callkit for iOS
 - Example using Pushkit/VoIP for iOS
-- macOS, Windows and Linux support (Dart-only; in-memory call registry plus OS notifications)
-- Web support (browser notifications, JavaScript and WebAssembly targets)
+- macOS, Windows and Linux support (Dart-only; in-memory call registry, notifications through a host-app delegate)
+- Web support (JavaScript and WebAssembly targets, notifications through a host-app delegate)
 
 > [!WARNING]
 > ### iOS: ONLY WORKING ON REAL DEVICE
@@ -124,57 +125,51 @@ flutter config --enable-swift-package-manager
 
 #### Desktop (macOS / Windows / Linux)
 
-Desktop support is implemented in Dart on top of
-[`local_notifier`](https://pub.dev/packages/local_notifier). There is no
-CallKit/ConnectionService equivalent outside Android and iOS, so the plugin
-keeps calls in an in-memory registry and shows a best-effort OS notification
-instead of a native call screen. The platform entries are declared in this
-package with `dartPluginClass: FlutterCallkitIncomingDesktop`, so no extra
-configuration or native code is required in the host app.
-
-Platform notes:
-
-- **macOS**: notifications use `NSUserNotification` (deprecated by Apple but
-  still functional). Allow notifications for the app in System Settings >
-  Notifications; the first notification can trigger the system permission
-  prompt.
-- **Windows**: toast notifications need an AppUserModelID backed by a Start
-  Menu shortcut. The plugin asks `local_notifier` to create that shortcut on
-  first use.
-- **Linux**: requires `libnotify` (`sudo apt-get install libnotify-dev`) and
-  a running notification daemon.
+Desktop support is implemented in Dart. There is no CallKit/ConnectionService
+equivalent outside Android and iOS, so the plugin keeps calls in an in-memory
+registry of active calls and mirrors the mobile event stream. The platform
+entries are declared in this package with
+`dartPluginClass: FlutterCallkitIncomingDesktop`, so no extra configuration
+or native code is required in the host app.
 
 Desktop behaviour:
 
-- `showCallkitIncoming` / `showMissCallNotification` register the call and
-  show or replace its notification; `hideCallkitIncoming`, `endCall` and
-  `endAllCalls` dismiss it.
+- `showCallkitIncoming` registers the call and forwards it to the installed
+  `CallkitNotificationDelegate`; `showMissCallNotification`, `endCall`,
+  `endAllCalls` and `hideCallkitIncoming` forward the matching
+  show/cancel operations.
+- Notification presentation and notification permissions belong to the host
+  application. See
+  [Call notification delegate](#-call-notification-delegate-desktop-and-web).
+  Without a delegate the call registry and event stream keep working, but no
+  OS notification is shown (the first skipped operation logs a warning).
 - `activeCalls` returns the in-memory registry. It is empty after a restart:
   desktop calls are not persisted and there is no call history integration.
 - `onEvent` emits `ACTION_CALL_INCOMING`, `ACTION_CALL_START`,
   `ACTION_CALL_ACCEPT` / `ACTION_CALL_DECLINE` (depending on whether the call
   was answered), `ACTION_CALL_CONNECTED`, `ACTION_CALL_ENDED`,
   `ACTION_CALL_TOGGLE_MUTE` and `ACTION_CALL_TOGGLE_HOLD`.
-- Clicking a ringing notification re-emits `ACTION_CALL_INCOMING` so the app
-  can bring its own call UI to the front. Notifications have no
-  accept/decline buttons: the app must drive those actions from its own UI.
+- If the delegate emits a `click` action for a ringing call, the plugin
+  re-emits `ACTION_CALL_INCOMING` so the app can bring its own call UI to the
+  front. Accept/decline/end actions emitted by the delegate are mapped to the
+  regular plugin events (see the delegate section below).
 - `onBackgroundMessage`, `acceptCallHandle`, `invokeFlutter` and
   `getDevicePushTokenVoIP` are mobile-only; on desktop they are no-ops (the
   token getter returns `null`).
-- `requestNotificationPermission` returns `true`;
-  `requestFullIntentPermission` and `canUseFullScreenIntent` return `false`
-  (Android-only).
+- `requestNotificationPermission` is a no-op that returns `true` (the
+  delegate owns the permission flow); `requestFullIntentPermission` and
+  `canUseFullScreenIntent` return `false` (Android-only).
 
 > [!NOTE]
 > Desktop does not provide ringing audio, vibration, audio-session handling or
-> CallKit-style accept/decline actions. Use your app's own audio and UI layer,
-> and treat the notification as advisory.
+> CallKit-style accept/decline notification buttons by itself. Use your app's
+> own audio and UI layer; if your notification stack supports actions, return
+> them through `CallkitNotificationDelegate.actions`.
 
 > [!NOTE]
 > The call registry and event stream are identical on all three desktop
-> platforms, but the notification layer is native per OS. Build and
-> smoke-test Windows and Linux on their own operating systems; a macOS host
-> cannot compile or run those desktop targets.
+> platforms. Build and smoke-test Windows and Linux on their own operating
+> systems; a macOS host cannot compile or run those desktop targets.
 
 ### 3. Usage
 
@@ -741,49 +736,172 @@ class MainApplication : Application() {  // or FlutterApplication
 > **Please check full example:** [Example](https://github.com/hiennguyen92/flutter_callkit_incoming/blob/master/example/android/app/src/main/kotlin/com/example/flutter_callkit_incoming_example/MainActivity.kt
 )
 
+## 🔔 Call notification delegate (desktop and web)
+
+On macOS, Windows, Linux and the web the plugin does not ship its own
+notification stack. It forwards call notification presentation to the host
+application through `CallkitNotificationDelegate`, which is exported from
+`package:flutter_callkit_incoming/flutter_callkit_incoming.dart`.
+
+Install a delegate before the first call:
+
+```dart
+import 'dart:async';
+
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+
+class MyCallNotificationDelegate implements CallkitNotificationDelegate {
+  final StreamController<CallkitNotificationAction> _actions =
+      StreamController<CallkitNotificationAction>.broadcast();
+
+  @override
+  Stream<CallkitNotificationAction> get actions => _actions.stream;
+
+  @override
+  Future<void> showIncoming(CallkitNotificationCall call) async {
+    // Show a ringing notification for call.callId. Use call.callerName,
+    // call.handle, call.appName, call.isVideo and call.extra.
+  }
+
+  @override
+  Future<void> showMissed(CallkitNotificationCall call) async {
+    // Show a missed-call notification (optional; a host may ignore it).
+  }
+
+  @override
+  Future<void> cancel(String callId) async {
+    // Remove the notification for callId. Must be a no-op when absent.
+  }
+
+  @override
+  Future<void> cancelAll() async {
+    // Remove every call notification created by the delegate.
+  }
+
+  void accept(String callId) {
+    _actions.add(CallkitNotificationAction(
+      callId: callId,
+      type: CallkitNotificationActionType.accept,
+    ));
+  }
+}
+
+void main() {
+  FlutterCallkitIncoming.setNotificationDelegate(
+    MyCallNotificationDelegate(),
+  );
+}
+```
+
+### Delegate contract
+
+| Member | When the plugin calls it |
+|--------|--------------------------|
+| `showIncoming(CallkitNotificationCall call)` | `showCallkitIncoming` on desktop/web. Should show (or replace) a ringing notification identified by `call.callId`. |
+| `showMissed(CallkitNotificationCall call)` | `showMissCallNotification` on desktop/web. A host may ignore missed-call notifications. |
+| `cancel(String callId)` | `hideCallkitIncoming`, `endCall`, `setCallConnected` and internal cleanup. Must be a no-op when no notification exists. |
+| `cancelAll()` | `endAllCalls` and engine shutdown on desktop/web. |
+| `actions` | Listened to by the plugin as soon as the delegate is installed. Return a **broadcast** stream. |
+
+`CallkitNotificationCall` contains:
+
+| Field | Description |
+|-------|-------------|
+| `callId` | Stable call identifier; use it as the notification identifier so repeated shows replace each other. |
+| `callerName` | Caller name, falling back to the handle/app name and then `Incoming call`. |
+| `handle` | Phone number, e-mail or other handle, when available. |
+| `appName` | Application name; falls back to `CallkitNotificationCall.defaultAppName`. |
+| `isVideo` | `true` for a video call (`CallKitParams.type == 1`). |
+| `extra` | The call's `CallKitParams.extra` map (empty when not set). |
+
+The delegate owns notification channels, permission requests and the actual
+system UI. `FlutterCallkitIncoming.requestNotificationPermission()` is a no-op
+returning `true` on desktop/web.
+
+### Delegate actions
+
+Emit `CallkitNotificationAction` values from the `actions` stream when the
+user interacts with a notification. The plugin maps them to the same events as
+the native implementations:
+
+| Action | Plugin event |
+|--------|--------------|
+| `CallkitNotificationActionType.accept` | `ACTION_CALL_ACCEPT`; the call is marked accepted and its notification is cancelled. |
+| `CallkitNotificationActionType.decline` | `ACTION_CALL_DECLINE`; the ringing call is removed. |
+| `CallkitNotificationActionType.end` | `ACTION_CALL_ENDED` for accepted/outgoing calls; `ACTION_CALL_DECLINE` for calls that are still ringing. |
+| `CallkitNotificationActionType.click` | `ACTION_CALL_INCOMING` while the call is ringing, so the app can show its own call UI. On the web, clicking a missed-call notification emits `ACTION_CALL_CALLBACK`. |
+
+### Managing the delegate
+
+```dart
+FlutterCallkitIncoming.setNotificationDelegate(delegate); // install / replace
+final current = FlutterCallkitIncoming.notificationDelegate; // read
+final same = FlutterCallkitIncoming.getNotificationDelegate(); // read (method form)
+FlutterCallkitIncoming.clearNotificationDelegate(); // remove
+```
+
+### Limitations
+
+- The delegate is only used on macOS, Windows, Linux and the web. Android and
+  iOS keep using their native notification implementations.
+- **Without a delegate no OS notification is shown.** Call state, ring
+  timeouts and the event stream keep working; the first skipped notification
+  operation logs a clear warning.
+- The plugin does not request notification permissions, create channels or
+  keep a notification registry of its own.
+- Exceptions thrown by the delegate (including its `actions` stream) are
+  caught and logged; they never break the call state machine.
+- The web delegate is subject to browser rules: serve the page from a secure
+  context, request permission from a user gesture and keep the page open for
+  notifications to render.
+
 ## 🌐 Web (including WASM)
 
 The plugin includes a Flutter web implementation that keeps the same public
-Dart API. It is written with `package:web` and `dart:js_interop` (no
-`dart:html`), so both `flutter build web` and `flutter build web --wasm`
-compile.
+Dart API and compiles for both `flutter build web` and
+`flutter build web --wasm`.
 
 The web implementation is a browser approximation of the native plugins. It
-tracks calls in memory and uses the browser Notification API; it is **not**
-CallKit/ConnectionService and cannot ring in the background.
+tracks calls in memory; call notification presentation is delegated to the
+host application (see
+[Call notification delegate](#-call-notification-delegate-desktop-and-web)).
+It is **not** CallKit/ConnectionService and cannot ring in the background.
 
 ### Behaviour
 
 | Public API | Web behaviour |
 |------------|----------------|
-| `showCallkitIncoming` | Tracks the call, emits `ACTION_CALL_INCOMING` and shows a browser notification (title = caller name, body = handle). |
+| `showCallkitIncoming` | Tracks the call, emits `ACTION_CALL_INCOMING` and calls `CallkitNotificationDelegate.showIncoming`. |
 | `startCall` | Tracks the outgoing call and emits `ACTION_CALL_START`. No notification is shown. |
-| `hideCallkitIncoming` | Closes the notification, forgets the call and emits `ACTION_CALL_ENDED` (same as the Android implementation). |
-| `endCall` | Emits `ACTION_CALL_ENDED` for accepted calls and `ACTION_CALL_DECLINE` for ringing calls. |
-| `endAllCalls` | Ends every tracked call and closes all notifications. |
+| `hideCallkitIncoming` | Cancels the notification, forgets the call and emits `ACTION_CALL_ENDED` (same as the Android implementation). |
+| `endCall` | Emits `ACTION_CALL_ENDED` for accepted calls and `ACTION_CALL_DECLINE` for ringing calls, then cancels the notification. |
+| `endAllCalls` | Ends every tracked call and calls `CallkitNotificationDelegate.cancelAll`. |
 | `activeCalls` | Returns the in-memory calls (the list is empty after a page reload). |
 | `muteCall`, `holdCall`, `isMuted`, `setCallConnected` | Update the in-memory state and emit `ACTION_CALL_TOGGLE_MUTE`, `ACTION_CALL_TOGGLE_HOLD` and `ACTION_CALL_CONNECTED`. |
-| `onEvent` | Same stream and `CallEvent` types as on the native platforms. |
-| `requestNotificationPermission` | Calls `Notification.requestPermission()` and returns whether notifications are granted. Call it from a user gesture. |
+| `onEvent` | Same stream and `CallEvent` types as on the native platforms. Delegate actions are translated into these events. |
+| `requestNotificationPermission` | No-op that returns `true`; notification permission belongs to the host delegate. |
 | `silenceEvents`, `unsilenceEvents` | Stop and restart event emission. |
 | `getDevicePushTokenVoIP`, `requestFullIntentPermission`, `canUseFullScreenIntent`, background handlers | Not applicable on the web (null/false/no-op). |
 
-Notification interaction:
+Notification interaction when the installed delegate emits actions:
 
-- Clicking a call notification accepts the call and emits `ACTION_CALL_ACCEPT`.
-- Dismissing a call notification declines the call and emits
-  `ACTION_CALL_DECLINE`.
+- `accept` accepts the call and emits `ACTION_CALL_ACCEPT`.
+- `decline` declines the call and emits `ACTION_CALL_DECLINE`. A notification
+  dismissal is the delegate's decision: return `decline` from the dismissal
+  handler if that is the desired behaviour.
+- `click` on a ringing call re-emits `ACTION_CALL_INCOMING` (it no longer
+  accepts the call implicitly); on a missed-call notification it emits
+  `ACTION_CALL_CALLBACK`.
 - Ring timeout (`CallKitParams.duration`, 30 000 ms by default) removes the call
   and emits `ACTION_CALL_TIMEOUT`.
 
 ### Usage
 
-Ask for the notification permission once, from a user gesture, and then show
-calls exactly like on the native platforms:
+Install a notification delegate once, then show calls exactly like on the
+native platforms:
 
 ```dart
-final granted = await FlutterCallkitIncoming
-    .requestNotificationPermission(<String, dynamic>{});
+FlutterCallkitIncoming.setNotificationDelegate(MyCallNotificationDelegate());
 
 FlutterCallkitIncoming.onEvent.listen((event) {
   // ACTION_CALL_INCOMING, ACTION_CALL_ACCEPT, ACTION_CALL_DECLINE, ...
@@ -799,28 +917,28 @@ await FlutterCallkitIncoming.showCallkitIncoming(
 );
 ```
 
-The web plugin also exposes diagnostics that are useful in debug builds:
+`FlutterCallkitIncomingWeb` only exposes registration diagnostics:
 
 ```dart
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming_web.dart';
 
-FlutterCallkitIncomingWeb.isNotificationSupported;
-FlutterCallkitIncomingWeb.isSecureContext;
-FlutterCallkitIncomingWeb.notificationPermission; // granted/denied/default/unsupported
+FlutterCallkitIncomingWeb.isRegistered;
 ```
 
 ### Requirements and limitations
 
-- The page must be served from a secure context (`https://` or
-  `localhost`); browsers reject notifications on plain HTTP origins.
-- Notification permission must be granted. If the Notification API is missing
-  or the permission was denied, calls are still tracked and events are still
-  emitted, but no system notification appears (headless fallback).
+- There is no built-in browser notification implementation any more. The host
+  delegate must use the browser Notification API (or an in-app overlay) and
+  handle its restrictions: secure context, permission from a user gesture and
+  the page staying open.
+- Without a delegate the call state machine and event stream still work, but
+  no system notification appears (headless fallback).
 - Notifications only exist while the page is open. There is no service worker
   integration, so the plugin cannot wake a closed tab, ring in the background
   or survive a page reload.
-- Notifications do not expose Accept/Decline buttons; the browser does not
-  support `actions` portably for page notifications.
+- Notification action buttons depend on the delegate and on what the browser
+  supports; the plugin only reacts to the `CallkitNotificationAction` values
+  the delegate emits.
 - No native CallKit UI, audio focus, ringtone or system phone-app integration.
 - Call state is per page load and is not shared between tabs.
 - Web push is not implemented. Deliver the call with your own transport (for

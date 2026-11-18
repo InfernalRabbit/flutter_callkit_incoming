@@ -3,88 +3,50 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming_web.dart';
-import 'package:flutter_callkit_incoming/src/web/browser_callkit_web_notification_bridge.dart';
+import 'package:flutter_callkit_incoming/src/notifications/callkit_notification_dispatcher.dart';
 import 'package:flutter_callkit_incoming/src/web/callkit_web_channel_host.dart';
 import 'package:flutter_callkit_incoming/src/web/callkit_web_engine.dart';
-import 'package:flutter_callkit_incoming/src/web/callkit_web_notification_bridge.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 
+import 'fake_notification_delegate.dart';
+
 /// Browser smoke tests for the web implementation.
 ///
-/// The Flutter web test harness does not expose the browser Notification API
-/// (the runtime reports it as unavailable), and it does not route framework
-/// platform messages to a plugin registrar. These tests therefore validate the
-/// web-only code paths that can run in that environment:
-///
-/// * the browser notification bridge falls back gracefully;
-/// * the channel host speaks the standard method/event channel protocol;
-/// * FlutterCallkitIncoming.onEvent decodes platform events.
+/// The Flutter web test harness does not route framework platform messages to
+/// a plugin registrar. These tests therefore drive the channel host through a
+/// fake [BinaryMessenger] and validate the same protocol the browser uses.
 ///
 /// Run with:
 ///
 ///     flutter test --platform chrome test/flutter_callkit_incoming_web_test.dart
-///     flutter test --platform chrome --wasm test/flutter_callkit_incoming_web_test.dart
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const StandardMethodCodec codec = StandardMethodCodec();
-
-  test('browser notification bridge degrades gracefully', () async {
-    final BrowserCallkitWebNotificationBridge bridge =
-        BrowserCallkitWebNotificationBridge();
-
-    debugPrint('web notification support: ${bridge.isSupported}');
-    debugPrint('web notification permission: ${bridge.permission}');
-
-    if (!bridge.isSupported) {
-      expect(bridge.permission, 'unsupported');
-      expect(await bridge.requestPermission(), 'unsupported');
-      expect(
-        await bridge.show(
-          const CallkitWebNotification(id: 'probe', title: 'Probe'),
-        ),
-        isFalse,
-      );
-    } else {
-      expect(
-        <String>['granted', 'denied', 'default'],
-        contains(bridge.permission),
-      );
-      if (!bridge.isPermissionGranted) {
-        expect(
-          await bridge.show(
-            const CallkitWebNotification(id: 'probe', title: 'Probe'),
-          ),
-          isFalse,
-        );
-      }
-    }
-    await bridge.closeAll();
-  });
 
   test('FlutterCallkitIncomingWeb.registerWith installs the web plugin',
       () async {
     FlutterCallkitIncomingWeb.registerWith(Registrar());
 
     expect(FlutterCallkitIncomingWeb.isRegistered, isTrue);
-    expect(
-      <String>['granted', 'denied', 'default', 'unsupported'],
-      contains(FlutterCallkitIncomingWeb.notificationPermission),
-    );
   });
 
-  test('channel host round-trips method calls and events', () async {
+  test('channel host round-trips method calls, delegate and events', () async {
     final FakePlatformMessenger messenger = FakePlatformMessenger();
-    final FakeNotificationBridge bridge = FakeNotificationBridge();
+    final FakeCallkitNotificationDelegate delegate =
+        FakeCallkitNotificationDelegate();
+    final CallkitNotificationDispatcher dispatcher =
+        CallkitNotificationDispatcher(delegate: delegate);
+    addTearDown(dispatcher.dispose);
+    addTearDown(delegate.dispose);
     final CallkitWebChannelHost host = CallkitWebChannelHost(
       messenger: messenger,
-      engine: CallkitWebEngine(notificationBridge: bridge),
+      engine: CallkitWebEngine(notifications: dispatcher),
     );
     host.register();
     addTearDown(host.dispose);
@@ -113,7 +75,8 @@ void main() {
 
     expect(codec.decodeEnvelope(result!), isTrue);
     expect(host.engine.activeCallParams.single.id, 'chrome-1');
-    expect(bridge.shown.keys, contains('chrome-1'));
+    expect(delegate.incomingCalls.single.callId, 'chrome-1');
+    expect(delegate.incomingCalls.single.callerName, 'Alice');
 
     await Future<void>.delayed(Duration.zero);
 
@@ -136,6 +99,56 @@ void main() {
       (events.single['body'] as Map<dynamic, dynamic>)['id'],
       'chrome-1',
     );
+  });
+
+  test('plugin channel forwards notifications to the installed delegate',
+      () async {
+    final FakeCallkitNotificationDelegate delegate =
+        FakeCallkitNotificationDelegate();
+    FlutterCallkitIncoming.setNotificationDelegate(delegate);
+    addTearDown(() async {
+      FlutterCallkitIncoming.clearNotificationDelegate();
+      await delegate.dispose();
+    });
+
+    final FakePlatformMessenger messenger = FakePlatformMessenger();
+    final CallkitWebChannelHost host = CallkitWebChannelHost(
+      messenger: messenger,
+      engine: CallkitWebEngine(),
+    );
+    host.register();
+    addTearDown(host.dispose);
+
+    final ByteData? result = await messenger.deliver(
+      CallkitWebChannelHost.methodChannelName,
+      codec.encodeMethodCall(MethodCall(
+        'showCallkitIncoming',
+        const CallKitParams(
+          id: 'global-1',
+          nameCaller: 'Bob',
+          handle: 'bob@example.com',
+          type: 1,
+          duration: 0,
+        ).toJson(),
+      )),
+    );
+
+    expect(codec.decodeEnvelope(result!), isTrue);
+    expect(delegate.incomingCalls.single.callId, 'global-1');
+    expect(delegate.incomingCalls.single.isVideo, isTrue);
+
+    await messenger.deliver(
+      CallkitWebChannelHost.methodChannelName,
+      codec.encodeMethodCall(const MethodCall(
+        'showMissCallNotification',
+        <String, dynamic>{
+          'id': 'global-2',
+          'nameCaller': 'Carol',
+          'type': 0,
+        },
+      )),
+    );
+    expect(delegate.missedCalls.single.callId, 'global-2');
   });
 
   test('onEvent decodes platform event envelopes', () async {
@@ -212,45 +225,5 @@ class FakePlatformMessenger implements BinaryMessenger {
   ) async {
     final ByteData? response = await deliver(channel, data);
     callback?.call(response);
-  }
-}
-
-class FakeNotificationBridge implements CallkitWebNotificationBridge {
-  final Map<String, CallkitWebNotification> shown =
-      <String, CallkitWebNotification>{};
-
-  @override
-  bool get isSupported => true;
-
-  @override
-  bool get isSecureContext => true;
-
-  @override
-  String get permission => 'granted';
-
-  @override
-  bool get isPermissionGranted => true;
-
-  @override
-  Future<String> requestPermission() async => 'granted';
-
-  @override
-  Future<bool> show(
-    CallkitWebNotification notification, {
-    void Function()? onClick,
-    void Function()? onDismiss,
-  }) async {
-    shown[notification.id] = notification;
-    return true;
-  }
-
-  @override
-  Future<void> close(String id) async {
-    shown.remove(id);
-  }
-
-  @override
-  Future<void> closeAll() async {
-    shown.clear();
   }
 }

@@ -1,17 +1,24 @@
 ## Unreleased
 
+### Call notification delegate (desktop and web)
+* Added the public `CallkitNotificationDelegate` contract and `FlutterCallkitIncoming.setNotificationDelegate()`, `notificationDelegate` / `getNotificationDelegate()` and `clearNotificationDelegate()`. The delegate receives `CallkitNotificationCall` values (`callId`, `callerName`, `handle`, `appName`, `isVideo`, `extra`) for `showIncoming`, `showMissed`, `cancel` and `cancelAll`.
+* Desktop and web now route every call notification operation through the installed delegate. Delegate actions map to the existing plugin events: `accept` -> `ACTION_CALL_ACCEPT`, `decline` -> `ACTION_CALL_DECLINE`, `end` -> `ACTION_CALL_ENDED` (or `ACTION_CALL_DECLINE` for a call that is still ringing), `click` -> `ACTION_CALL_INCOMING` (and `ACTION_CALL_CALLBACK` for a missed-call notification on web).
+* **Breaking:** removed the built-in `local_notifier` desktop backend and the browser Notification API bridge (`BrowserCallkitWebNotificationBridge`). Hosts must install a delegate to show OS notifications on macOS, Windows, Linux and the web.
+* Without a delegate no OS notification is shown; the call registry, ring timeouts and event stream keep working, and the first skipped notification operation logs a clear warning. Exceptions thrown by a delegate are caught and logged.
+* Removed the `local_notifier` and `web` package dependencies. Android and iOS keep using their native notification implementations unchanged.
+* Tests updated to install a fake delegate; added coverage for the dispatcher, the public delegate API, desktop action mapping and the headless (no delegate) path.
+
 ### Desktop support (macOS / Windows / Linux)
 * Added a Dart-only desktop implementation registered through `dartPluginClass` for macOS, Windows and Linux. The existing Android/iOS MethodChannel implementations are unchanged.
 * Added desktop implementations of `showCallkitIncoming`, `startCall`, `endCall`, `endAllCalls`, `activeCalls`, `setCallConnected`, `muteCall`/`isMuted`, `holdCall`, `hideCallkitIncoming`, `showMissCallNotification`, `silenceEvents`/`unsilenceEvents` and `onEvent`, backed by an in-memory call registry.
-* Native OS notifications are best effort via `local_notifier` (NSUserNotification on macOS, WinToast on Windows, libnotify on Linux). Notification failures are logged and never break the call registry.
-* Desktop limitations: no native call UI, ringing audio, call history, or accept/decline notification buttons. Clicking a ringing notification re-emits `ACTION_CALL_INCOMING`; apps drive accept/decline from their own UI. `onBackgroundMessage`, `acceptCallHandle` and `invokeFlutter` are no-ops on desktop.
+* Desktop limitations: no native call UI, ringing audio or call history. A ringing-notification click re-emits `ACTION_CALL_INCOMING`; accept/decline/end actions are available only when the host delegate emits them. `onBackgroundMessage`, `acceptCallHandle` and `invokeFlutter` are no-ops on desktop.
 * Added unit tests for the desktop registry/event flow and a public-API round-trip test.
 
 **Web support (JavaScript and WebAssembly)**
-* Added a Flutter web implementation (`lib/flutter_callkit_incoming_web.dart`, registered through the `web` platform in `pubspec.yaml`) that keeps the existing public Dart API. It is implemented with `package:web` and `dart:js_interop`, so `flutter build web --wasm` compiles.
-* Calls are tracked in memory and surfaced with the browser Notification API: `showCallkitIncoming`, `startCall`, `hideCallkitIncoming`, `endCall`, `endAllCalls`, `activeCalls`, `muteCall`, `holdCall`, `isMuted`, `setCallConnected`, `silenceEvents` and `onEvent` follow Android semantics. Clicking a notification accepts, dismissing declines, and ring timeout emits `ACTION_CALL_TIMEOUT`.
-* If the Notification API is unavailable or permission is denied, the call state machine and event stream keep working without notifications.
-* Web limitations: no CallKit/ConnectionService UI, no background ringing, no notification action buttons and no web push.
+* Added a Flutter web implementation (`lib/flutter_callkit_incoming_web.dart`, registered through the `web` platform in `pubspec.yaml`) that keeps the existing public Dart API and compiles for JavaScript and WebAssembly.
+* Calls are tracked in memory; `showCallkitIncoming`, `startCall`, `hideCallkitIncoming`, `endCall`, `endAllCalls`, `activeCalls`, `muteCall`, `holdCall`, `isMuted`, `setCallConnected`, `silenceEvents` and `onEvent` follow Android semantics. Notification presentation is delegated to the host application; the ring timeout emits `ACTION_CALL_TIMEOUT`.
+* If no delegate is installed, the call state machine and event stream keep working without notifications.
+* Web limitations: no CallKit/ConnectionService UI, no background ringing, no built-in notification buttons and no web push.
 * Tests: VM unit tests for web engine/channel host plus browser tests (`flutter test --platform chrome [--wasm]`).
 
 ## 3.1.6

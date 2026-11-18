@@ -4,9 +4,9 @@ import 'package:flutter_callkit_incoming/entities/entities.dart';
 
 /// Backend contract for the Dart-only desktop implementation.
 ///
-/// This file is platform-neutral (no `dart:io`, no `local_notifier` import) so
-/// that `flutter_callkit_incoming.dart` can import it on every platform,
-/// including the web, where [callkitDesktopPlatform] resolves to `null`.
+/// This file is platform-neutral (no `dart:io` import) so that
+/// `flutter_callkit_incoming.dart` can import it on every platform, including
+/// the web, where [callkitDesktopPlatform] resolves to `null`.
 abstract class CallkitDesktopPlatform {
   /// Events emitted by the in-memory desktop call registry.
   Stream<CallEvent?> get onEvent;

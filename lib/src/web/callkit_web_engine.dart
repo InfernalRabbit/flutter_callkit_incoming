@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter_callkit_incoming/entities/entities.dart';
-
-import 'callkit_web_notification_bridge.dart';
+import 'package:flutter_callkit_incoming/src/notifications/callkit_notification_delegate.dart';
+import 'package:flutter_callkit_incoming/src/notifications/callkit_notification_dispatcher.dart';
 
 /// Abstraction over timers so ring timeouts can be tested without waiting.
 abstract class CallkitWebClock {
@@ -28,44 +28,61 @@ class RealCallkitWebClock implements CallkitWebClock {
 /// `flutter_callkit_incoming`.
 ///
 /// The engine implements the semantics of the Android implementation of the
-/// plugin on top of the browser Notification API:
+/// plugin while delegating notification presentation to the host
+/// application's [CallkitNotificationDelegate]:
 ///
 /// * `showCallkitIncoming` stores the call, emits `ACTION_CALL_INCOMING` and
-///   asks the browser to show a notification.
+///   asks the delegate to show a notification.
 /// * `startCall` stores an outgoing call and emits `ACTION_CALL_START`.
 /// * `endCall` emits `ACTION_CALL_ENDED` for accepted calls and
 ///   `ACTION_CALL_DECLINE` for ringing calls, then forgets the call.
 /// * `endAllCalls` does the same for every active call.
 /// * `activeCalls` returns the current in-memory calls.
-/// * clicking a call notification emits `ACTION_CALL_ACCEPT`, dismissing it
-///   emits `ACTION_CALL_DECLINE`.
+/// * delegate actions are translated to plugin events: accept emits
+///   `ACTION_CALL_ACCEPT`, decline emits `ACTION_CALL_DECLINE`, end emits
+///   `ACTION_CALL_ENDED`, clicking a ringing notification re-emits
+///   `ACTION_CALL_INCOMING` and clicking a missed-call notification emits
+///   `ACTION_CALL_CALLBACK`.
 /// * the ring timeout (`CallKitParams.duration`, 30 seconds by default) emits
 ///   `ACTION_CALL_TIMEOUT`.
+///
+/// Without an installed delegate the engine is headless: calls are tracked and
+/// events are emitted, but no OS notification appears.
 ///
 /// This class intentionally does not import any web-only library so it can be
 /// unit tested on the Dart VM.
 class CallkitWebEngine {
   /// Creates an engine.
   ///
-  /// [notificationBridge] defaults to a bridge that never shows notifications,
-  /// [clock] defaults to [RealCallkitWebClock].
+  /// [notifications] defaults to the process-wide
+  /// [CallkitNotificationDispatcher.instance]; [clock] defaults to
+  /// [RealCallkitWebClock].
   CallkitWebEngine({
-    CallkitWebNotificationBridge? notificationBridge,
+    CallkitNotificationDispatcher? notifications,
     CallkitWebClock? clock,
-  })  : _notifications = notificationBridge ??
-            const UnsupportedCallkitWebNotificationBridge(),
-        _clock = clock ?? const RealCallkitWebClock();
+  })  : _notifications =
+            notifications ?? CallkitNotificationDispatcher.instance,
+        _clock = clock ?? const RealCallkitWebClock() {
+    _actionSubscription = _notifications.actions.listen(
+      (CallkitNotificationAction action) {
+        _handleNotificationAction(action);
+      },
+    );
+  }
 
   /// Default ring duration used when [CallKitParams.duration] is not set.
   ///
   /// Matches the default used by the Android implementation.
   static const int defaultRingTimeoutMs = 30000;
 
-  final CallkitWebNotificationBridge _notifications;
+  final CallkitNotificationDispatcher _notifications;
   final CallkitWebClock _clock;
   final Map<String, _WebCall> _calls = <String, _WebCall>{};
+  final Map<String, CallKitParams> _missedCalls = <String, CallKitParams>{};
   final StreamController<Map<String, dynamic>> _eventController =
       StreamController<Map<String, dynamic>>.broadcast();
+
+  StreamSubscription<CallkitNotificationAction>? _actionSubscription;
 
   bool _eventsSilenced = false;
   bool _disposed = false;
@@ -74,14 +91,9 @@ class CallkitWebEngine {
   /// platform-side event channel.
   Stream<Map<String, dynamic>> get events => _eventController.stream;
 
-  /// The bridge used to show browser notifications.
-  CallkitWebNotificationBridge get notificationBridge => _notifications;
-
-  /// Whether the browser exposes the Notification API.
-  bool get isNotificationSupported => _notifications.isSupported;
-
-  /// Current browser notification permission.
-  String get notificationPermission => _notifications.permission;
+  /// Whether a notification delegate is currently installed.
+  bool get isNotificationDelegateInstalled =>
+      _notifications.isDelegateInstalled;
 
   /// Whether event emission is currently silenced.
   bool get areEventsSilenced => _eventsSilenced;
@@ -150,12 +162,17 @@ class CallkitWebEngine {
       return;
     }
     _disposed = true;
+    final StreamSubscription<CallkitNotificationAction>? subscription =
+        _actionSubscription;
+    _actionSubscription = null;
+    unawaited(subscription?.cancel());
     for (final _WebCall call in _calls.values) {
       call.cancelTimeout?.call();
       call.cancelTimeout = null;
     }
     _calls.clear();
-    unawaited(_notifications.closeAll());
+    _missedCalls.clear();
+    unawaited(_notifications.cancelAll());
     unawaited(_eventController.close());
   }
 
@@ -165,10 +182,13 @@ class CallkitWebEngine {
       return false;
     }
     await _forgetCall(params.id);
+    _missedCalls.remove(params.id);
     final _WebCall call = _WebCall(params);
     _calls[params.id] = call;
     _emitEvent(CallEventConstants.actionCallIncoming, call.eventBody());
-    await _showNotification(call);
+    await _notifications.showIncoming(
+      callkitNotificationCallFromParams(params),
+    );
     _scheduleTimeout(call);
     return true;
   }
@@ -178,29 +198,13 @@ class CallkitWebEngine {
     if (params == null) {
       return false;
     }
-    final String title = _firstNonEmpty(<String?>[
-          params.nameCaller,
-          params.appName,
-          params.handle,
-        ]) ??
-        'Missed call';
-    final String? handle = params.handle;
-    final bool shown = await _notifications.show(
-      CallkitWebNotification(
-        id: 'missed_${params.id}',
-        title: title,
-        body: handle == null || handle.isEmpty
-            ? 'Missed call'
-            : 'Missed call \u2022 $handle',
-        tag: 'callkit_missed_${params.id}',
-        icon: _iconFor(params),
-      ),
-      onClick: () => _emitEvent(
-        CallEventConstants.actionCallCallback,
-        _callBody(params, isAccepted: false),
-      ),
+    // The ringing notification is stale once the call is reported as missed.
+    _missedCalls[params.id] = params;
+    await _notifications.cancel(params.id);
+    await _notifications.showMissed(
+      callkitNotificationCallFromParams(params),
     );
-    return shown || !_notifications.isSupported;
+    return true;
   }
 
   Future<bool> _hideCallkitIncoming(dynamic arguments) async {
@@ -209,7 +213,7 @@ class CallkitWebEngine {
       return false;
     }
     if (!_calls.containsKey(params.id)) {
-      await _notifications.close(params.id);
+      await _notifications.cancel(params.id);
       return true;
     }
     // The Android implementation sends ACTION_CALL_ENDED when the incoming
@@ -238,10 +242,15 @@ class CallkitWebEngine {
     if (id == null) {
       return false;
     }
+    await _endCallById(id);
+    return true;
+  }
+
+  Future<void> _endCallById(String id) async {
     final _WebCall? call = _calls[id];
     if (call == null) {
-      await _notifications.close(id);
-      return true;
+      await _notifications.cancel(id);
+      return;
     }
     await _forgetCall(
       id,
@@ -249,7 +258,6 @@ class CallkitWebEngine {
           ? CallEventConstants.actionCallEnded
           : CallEventConstants.actionCallDecline,
     );
-    return true;
   }
 
   Future<bool> _endAllCalls() async {
@@ -266,7 +274,7 @@ class CallkitWebEngine {
             : CallEventConstants.actionCallDecline,
       );
     }
-    await _notifications.closeAll();
+    await _notifications.cancelAll();
     return true;
   }
 
@@ -282,7 +290,7 @@ class CallkitWebEngine {
     call.isAccepted = true;
     call.cancelTimeout?.call();
     call.cancelTimeout = null;
-    await _notifications.close(id);
+    await _notifications.cancel(id);
     _emitEvent(CallEventConstants.actionCallConnected, call.eventBody());
     return true;
   }
@@ -332,11 +340,11 @@ class CallkitWebEngine {
   }
 
   Future<bool> _requestNotificationPermission() async {
-    if (!_notifications.isSupported) {
-      return false;
-    }
-    final String permission = await _notifications.requestPermission();
-    return permission == 'granted';
+    // Notification permission belongs to the host application now that the
+    // delegate owns presentation, so there is nothing to request here. Report
+    // success so callers that gate showCallkitIncoming on this do not skip the
+    // call.
+    return true;
   }
 
   List<Map<String, dynamic>> _activeCalls() {
@@ -345,38 +353,55 @@ class CallkitWebEngine {
         .toList(growable: false);
   }
 
-  Future<void> _showNotification(_WebCall call) async {
-    final CallKitParams params = call.params;
-    final String title = _firstNonEmpty(<String?>[
-          params.nameCaller,
-          params.appName,
-          params.handle,
-        ]) ??
-        'Incoming call';
-    final String? handle = params.handle;
-    final bool shown = await _notifications.show(
-      CallkitWebNotification(
-        id: params.id,
-        title: title,
-        body: handle ?? '',
-        tag: 'callkit_${params.id}',
-        icon: _iconFor(params),
-      ),
-      onClick: () => _acceptCall(params.id),
-      onDismiss: () => _declineCall(params.id),
-    );
-    call.notificationShown = shown;
+  void _handleNotificationAction(CallkitNotificationAction action) {
+    final String id = action.callId;
+    final _WebCall? call = _calls[id];
+    switch (action.type) {
+      case CallkitNotificationActionType.accept:
+        if (call != null) {
+          unawaited(_acceptCall(id));
+        }
+        break;
+      case CallkitNotificationActionType.decline:
+        if (call != null) {
+          unawaited(_declineCall(id));
+        }
+        break;
+      case CallkitNotificationActionType.end:
+        if (call != null) {
+          unawaited(_endCallById(id));
+        }
+        break;
+      case CallkitNotificationActionType.click:
+        final CallKitParams? missed = _missedCalls[id];
+        if (call != null) {
+          // Clicking a ringing notification asks the app to bring its own call
+          // UI to the front; it does not accept the call by itself.
+          if (!call.isAccepted) {
+            _emitEvent(
+              CallEventConstants.actionCallIncoming,
+              call.eventBody(),
+            );
+          }
+        } else if (missed != null) {
+          _emitEvent(
+            CallEventConstants.actionCallCallback,
+            _callBody(missed, isAccepted: false),
+          );
+        }
+        break;
+    }
   }
 
   Future<void> _acceptCall(String id) async {
     final _WebCall? call = _calls[id];
-    if (call == null) {
+    if (call == null || call.isAccepted) {
       return;
     }
     call.isAccepted = true;
     call.cancelTimeout?.call();
     call.cancelTimeout = null;
-    await _notifications.close(id);
+    await _notifications.cancel(id);
     _emitEvent(CallEventConstants.actionCallAccept, call.eventBody());
   }
 
@@ -391,12 +416,12 @@ class CallkitWebEngine {
   Future<void> _forgetCall(String id, {String? event}) async {
     final _WebCall? call = _calls.remove(id);
     if (call == null) {
-      await _notifications.close(id);
+      await _notifications.cancel(id);
       return;
     }
     call.cancelTimeout?.call();
     call.cancelTimeout = null;
-    await _notifications.close(id);
+    await _notifications.cancel(id);
     if (event != null) {
       _emitEvent(event, call.eventBody());
     }
@@ -469,29 +494,6 @@ class CallkitWebEngine {
     return value;
   }
 
-  String? _iconFor(CallKitParams params) {
-    final String? icon = params.avatar;
-    if (icon == null || icon.isEmpty) {
-      return null;
-    }
-    if (icon.startsWith('http://') ||
-        icon.startsWith('https://') ||
-        icon.startsWith('data:') ||
-        icon.startsWith('/')) {
-      return icon;
-    }
-    return null;
-  }
-
-  String? _firstNonEmpty(List<String?> values) {
-    for (final String? value in values) {
-      if (value != null && value.isNotEmpty) {
-        return value;
-      }
-    }
-    return null;
-  }
-
   Map<String, dynamic> _callBody(
     CallKitParams params, {
     required bool isAccepted,
@@ -509,7 +511,6 @@ class _WebCall {
   bool isAccepted;
   bool isMuted = false;
   bool isOnHold = false;
-  bool notificationShown = false;
   void Function()? cancelTimeout;
 
   String get id => params.id;

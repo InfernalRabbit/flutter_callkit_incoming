@@ -22,8 +22,6 @@ dependencies:
   flutter_web_plugins:
     sdk: flutter
   json_annotation: ^4.9.0
-  local_notifier: ^0.1.6
-  web: ^1.0.0
 
 dev_dependencies:
   build_runner: ^2.7.0
@@ -52,9 +50,10 @@ flutter:
         pluginClass: FlutterCallkitIncomingWeb
         fileName: flutter_callkit_incoming_web.dart
       # Desktop platforms are implemented in Dart (see
-      # lib/flutter_callkit_incoming_desktop.dart) on top of the
-      # cross-platform local_notifier package. No native plugin code ships
-      # for these platforms.
+      # lib/flutter_callkit_incoming_desktop.dart). Call notification
+      # presentation is delegated to the host application through
+      # CallkitNotificationDelegate; no native plugin code ships for these
+      # platforms.
       macos:
         dartPluginClass: FlutterCallkitIncomingDesktop
       windows:

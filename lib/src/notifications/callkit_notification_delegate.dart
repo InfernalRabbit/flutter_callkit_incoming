@@ -6,10 +6,13 @@ class CallkitNotificationCall {
     required this.callId,
     required this.callerName,
     this.handle,
-    this.appName = 'Доступ',
+    this.appName = defaultAppName,
     this.isVideo = false,
     this.extra = const <String, dynamic>{},
   });
+
+  /// Fallback application name used when [CallKitParams.appName] is empty.
+  static const String defaultAppName = 'Доступ';
 
   final String callId;
   final String callerName;
@@ -34,10 +37,16 @@ class CallkitNotificationAction {
 
 /// Notification presentation is owned by the host application.
 ///
-/// The plugin never creates notification channels or asks for permissions
-/// itself. Implement this delegate with flutter_local_notifications (or any
-/// other notification stack) and install it with
-/// FlutterCallkitIncoming.setNotificationDelegate().
+/// On macOS, Windows, Linux and the web the plugin never creates notification
+/// channels or asks for permissions itself. Every call notification operation
+/// is forwarded to the delegate installed with
+/// `FlutterCallkitIncoming.setNotificationDelegate()`. Implement it with
+/// flutter_local_notifications (or any other notification stack).
+///
+/// Android and iOS keep using their native notification implementations and
+/// ignore this delegate. When no delegate is installed on desktop/web, calls
+/// are still tracked and events are still emitted, but no OS notification is
+/// shown.
 abstract class CallkitNotificationDelegate {
   /// Shows a ringing incoming-call notification.
   Future<void> showIncoming(CallkitNotificationCall call);
@@ -52,5 +61,12 @@ abstract class CallkitNotificationDelegate {
   Future<void> cancelAll();
 
   /// Actions from the notification UI (click/accept/decline/end).
+  ///
+  /// Return a broadcast stream: the plugin subscribes to it when the delegate
+  /// is installed. Emit [CallkitNotificationActionType.accept],
+  /// [CallkitNotificationActionType.decline] and
+  /// [CallkitNotificationActionType.end] for the corresponding notification
+  /// buttons; they become the regular ACTION_CALL_ACCEPT,
+  /// ACTION_CALL_DECLINE and ACTION_CALL_ENDED plugin events.
   Stream<CallkitNotificationAction> get actions;
 }

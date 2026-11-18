@@ -3,45 +3,10 @@ import 'dart:async';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/src/desktop/callkit_desktop_controller.dart';
-import 'package:flutter_callkit_incoming/src/desktop/callkit_desktop_notification.dart';
+import 'package:flutter_callkit_incoming/src/notifications/callkit_notification_dispatcher.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-class _FakeNotification implements CallkitDesktopNotification {
-  final List<String> shownIds = <String>[];
-  final List<CallkitDesktopNotificationKind> shownKinds =
-      <CallkitDesktopNotificationKind>[];
-  final List<String> hiddenIds = <String>[];
-  int hideAllCalls = 0;
-  bool disposed = false;
-
-  void Function(String callId)? _onTap;
-
-  @override
-  set onTap(void Function(String callId)? handler) => _onTap = handler;
-
-  void tap(String callId) => _onTap?.call(callId);
-
-  @override
-  Future<void> show(
-    String callId,
-    CallKitParams params, {
-    required CallkitDesktopNotificationKind kind,
-  }) async {
-    shownIds.add(callId);
-    shownKinds.add(kind);
-  }
-
-  @override
-  Future<void> hide(String callId) async => hiddenIds.add(callId);
-
-  @override
-  Future<void> hideAll() async => hideAllCalls++;
-
-  @override
-  Future<void> dispose() async {
-    disposed = true;
-  }
-}
+import 'fake_notification_delegate.dart';
 
 CallKitParams _params(
   String id, {
@@ -63,11 +28,12 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late CallkitDesktopController controller;
-  late _FakeNotification notifications;
+  late FakeCallkitNotificationDelegate notifications;
+  late CallkitNotificationDispatcher dispatcher;
   late List<CallEvent?> events;
   late StreamSubscription<CallEvent?> subscription;
 
-  Future<void> flush() => Future<void>.delayed(Duration.zero);
+  Future<void> flush() => pumpEventQueue();
 
   Future<void> clearEvents() async {
     // The broadcast stream delivers asynchronously; make sure any pending
@@ -77,8 +43,9 @@ void main() {
   }
 
   setUp(() {
-    notifications = _FakeNotification();
-    controller = CallkitDesktopController(notification: notifications);
+    notifications = FakeCallkitNotificationDelegate();
+    dispatcher = CallkitNotificationDispatcher(delegate: notifications);
+    controller = CallkitDesktopController(notifications: dispatcher);
     events = <CallEvent?>[];
     subscription = controller.onEvent.listen(events.add);
   });
@@ -86,6 +53,8 @@ void main() {
   tearDown(() async {
     await subscription.cancel();
     await controller.dispose();
+    await dispatcher.dispose();
+    await notifications.dispose();
   });
 
   test('desktop registrant entry point is exported from the main library', () {
@@ -106,11 +75,11 @@ void main() {
     expect(active.single.nameCaller, 'Alice');
     expect(active.single.isAccepted, isFalse);
 
-    expect(notifications.shownIds, <String>['call-1']);
-    expect(
-      notifications.shownKinds.single,
-      CallkitDesktopNotificationKind.incoming,
-    );
+    final CallkitNotificationCall shown = notifications.incomingCalls.single;
+    expect(shown.callId, 'call-1');
+    expect(shown.callerName, 'Alice');
+    expect(shown.handle, '0123456789');
+    expect(shown.appName, 'Callkit');
     expect(events, hasLength(1));
     expect(events.single, isA<CallEventActionCallIncoming>());
     expect(
@@ -128,7 +97,7 @@ void main() {
     await flush();
 
     expect(await controller.activeCalls(), isEmpty);
-    expect(notifications.hiddenIds, contains('call-1'));
+    expect(notifications.cancelledCallIds, contains('call-1'));
     expect(events.single, isA<CallEventActionCallDecline>());
   });
 
@@ -143,7 +112,7 @@ void main() {
     expect(events.single, isA<CallEventActionCallConnected>());
     final active = await controller.activeCalls();
     expect(active.single.isAccepted, isTrue);
-    expect(notifications.hiddenIds, contains('call-1'));
+    expect(notifications.cancelledCallIds, contains('call-1'));
 
     await clearEvents();
     await controller.endCall('call-1');
@@ -165,9 +134,54 @@ void main() {
     await flush();
 
     expect(await controller.activeCalls(), isEmpty);
-    expect(notifications.hideAllCalls, 1);
+    expect(notifications.cancelAllCount, 1);
     expect(events, hasLength(2));
     expect(events.every((e) => e is CallEventActionCallDecline), isTrue);
+  });
+
+  test('accepted notification action emits ACTION_CALL_ACCEPT', () async {
+    await controller.showCallkitIncoming(_params('call-1'));
+    await clearEvents();
+
+    notifications.emitAction(
+      'call-1',
+      CallkitNotificationActionType.accept,
+    );
+    await flush();
+
+    expect(events.single, isA<CallEventActionCallAccept>());
+    expect(
+        (events.single! as CallEventActionCallAccept).callKitParams.isAccepted,
+        isTrue);
+    expect((await controller.activeCalls()).single.isAccepted, isTrue);
+    expect(notifications.cancelledCallIds, contains('call-1'));
+  });
+
+  test('declined notification action emits ACTION_CALL_DECLINE', () async {
+    await controller.showCallkitIncoming(_params('call-1'));
+    await clearEvents();
+
+    notifications.emitAction(
+      'call-1',
+      CallkitNotificationActionType.decline,
+    );
+    await flush();
+
+    expect(events.single, isA<CallEventActionCallDecline>());
+    expect(await controller.activeCalls(), isEmpty);
+    expect(notifications.cancelledCallIds, contains('call-1'));
+  });
+
+  test('ended notification action emits ACTION_CALL_ENDED', () async {
+    await controller.showCallkitIncoming(_params('call-1'));
+    await controller.setCallConnected('call-1');
+    await clearEvents();
+
+    notifications.emitAction('call-1', CallkitNotificationActionType.end);
+    await flush();
+
+    expect(events.single, isA<CallEventActionCallEnded>());
+    expect(await controller.activeCalls(), isEmpty);
   });
 
   test('notification tap re-emits ACTION_CALL_INCOMING while ringing',
@@ -176,7 +190,7 @@ void main() {
     await flush();
     await clearEvents();
 
-    notifications.tap('call-1');
+    notifications.emitAction('call-1', CallkitNotificationActionType.click);
     await flush();
 
     expect(events.single, isA<CallEventActionCallIncoming>());
@@ -184,7 +198,7 @@ void main() {
     await controller.endCall('call-1');
     await flush();
     await clearEvents();
-    notifications.tap('call-1');
+    notifications.emitAction('call-1', CallkitNotificationActionType.click);
     await flush();
     expect(events, isEmpty);
   });
@@ -195,7 +209,7 @@ void main() {
     await flush();
 
     expect(await controller.activeCalls(), hasLength(1));
-    expect(notifications.shownIds, <String>['call-1']);
+    expect(notifications.incomingCalls.single.callId, 'call-1');
     expect(events, isEmpty);
 
     await controller.setSilenceEvents(false);
@@ -229,7 +243,7 @@ void main() {
 
     expect(await controller.activeCalls(), hasLength(1));
     expect(events.single, isA<CallEventActionCallStart>());
-    expect(notifications.shownIds, isEmpty);
+    expect(notifications.incomingCalls, isEmpty);
 
     await clearEvents();
     await controller.endCall('outgoing-1');
@@ -246,11 +260,9 @@ void main() {
     await flush();
 
     expect(await controller.activeCalls(), isEmpty);
-    expect(notifications.shownIds, <String>['call-1', 'call-1']);
-    expect(
-      notifications.shownKinds.last,
-      CallkitDesktopNotificationKind.missedCall,
-    );
+    expect(notifications.incomingCalls.single.callId, 'call-1');
+    expect(notifications.missedCalls.single.callId, 'call-1');
+    expect(notifications.cancelledCallIds, contains('call-1'));
     expect(events, isEmpty);
   });
 
@@ -260,7 +272,45 @@ void main() {
     await flush();
 
     expect(events, isEmpty);
-    expect(notifications.hiddenIds, contains('missing'));
+    expect(notifications.cancelledCallIds, contains('missing'));
+  });
+
+  test('a controller without a delegate keeps the call state machine working',
+      () async {
+    final CallkitNotificationDispatcher headless =
+        CallkitNotificationDispatcher();
+    addTearDown(headless.dispose);
+    final CallkitDesktopController withoutNotifications =
+        CallkitDesktopController(notifications: headless);
+    addTearDown(withoutNotifications.dispose);
+
+    final List<CallEvent?> headlessEvents = <CallEvent?>[];
+    final StreamSubscription<CallEvent?> headlessSubscription =
+        withoutNotifications.onEvent.listen(headlessEvents.add);
+    addTearDown(headlessSubscription.cancel);
+
+    await withoutNotifications.showCallkitIncoming(_params('headless-1'));
+    await flush();
+
+    expect(
+      (await withoutNotifications.activeCalls()).single.id,
+      'headless-1',
+    );
+    expect(headlessEvents.single, isA<CallEventActionCallIncoming>());
+  });
+
+  test('a throwing delegate does not break call state or events', () async {
+    notifications.throwOnEveryCall = true;
+
+    await controller.showCallkitIncoming(_params('call-1'));
+    await flush();
+
+    expect(await controller.activeCalls(), hasLength(1));
+    expect(events.single, isA<CallEventActionCallIncoming>());
+
+    await controller.endCall('call-1');
+    await flush();
+    expect(events.last, isA<CallEventActionCallDecline>());
   });
 
   test('mobile-only APIs return safe desktop defaults', () async {

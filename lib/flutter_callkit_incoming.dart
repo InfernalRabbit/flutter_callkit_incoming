@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'entities/entities.dart';
 import 'src/desktop/callkit_desktop_factory.dart';
 import 'src/desktop/callkit_desktop_platform.dart';
+import 'src/notifications/callkit_notification_delegate.dart';
+import 'src/notifications/callkit_notification_dispatcher.dart';
 
 // Flutter's generated desktop plugin registrant looks up
 // FlutterCallkitIncomingDesktop on this library.
@@ -22,8 +24,10 @@ export 'src/notifications/callkit_notification_delegate.dart';
 /// * callConnected(dynamic)
 ///
 /// The API is identical on every platform. On macOS, Windows and Linux a
-/// Dart-only implementation keeps the calls in an in-memory registry and shows
-/// OS notifications instead of a native CallKit/ConnectionService call UI.
+/// Dart-only implementation keeps the calls in an in-memory registry instead
+/// of a native CallKit/ConnectionService call UI. On desktop and on the web
+/// call notification presentation is delegated to the host application; see
+/// [setNotificationDelegate].
 
 typedef BackgroundMessageHandler = Future<void> Function(CallEvent callEvent);
 typedef ActionEvent = void Function(Map<dynamic, dynamic> data);
@@ -75,6 +79,48 @@ class FlutterCallkitIncoming {
       _desktopPlatformResolved = true;
     }
     return _desktopPlatform;
+  }
+
+  /// Installs the host application's notification delegate on desktop and
+  /// web.
+  ///
+  /// The plugin does not create notification channels or ask for notification
+  /// permissions itself on those platforms. Instead it forwards
+  /// `showCallkitIncoming`, `showMissCallNotification`,
+  /// `hideCallkitIncoming`, `endCall` and `endAllCalls` to this delegate.
+  /// Actions emitted through [CallkitNotificationDelegate.actions] are mapped
+  /// to the regular [onEvent] stream (`ACTION_CALL_ACCEPT`,
+  /// `ACTION_CALL_DECLINE`, `ACTION_CALL_ENDED`, `ACTION_CALL_INCOMING` and
+  /// `ACTION_CALL_CALLBACK`).
+  ///
+  /// Android and iOS keep using their native notification implementation and
+  /// ignore this setting. Passing `null` removes the current delegate.
+  ///
+  /// Without a delegate, call state and events keep working but no OS
+  /// notification is shown.
+  static void setNotificationDelegate(CallkitNotificationDelegate? delegate) {
+    CallkitNotificationDispatcher.instance.delegate = delegate;
+  }
+
+  /// The notification delegate currently installed by the host application.
+  ///
+  /// Returns `null` when no delegate has been installed.
+  static CallkitNotificationDelegate? get notificationDelegate =>
+      CallkitNotificationDispatcher.instance.delegate;
+
+  /// Returns the notification delegate currently installed by the host
+  /// application, or `null` when none is installed.
+  ///
+  /// Method form of [notificationDelegate] for hosts that prefer an explicit
+  /// getter.
+  static CallkitNotificationDelegate? getNotificationDelegate() =>
+      notificationDelegate;
+
+  /// Removes the current notification delegate, if any.
+  ///
+  /// Equivalent to `setNotificationDelegate(null)`.
+  static void clearNotificationDelegate() {
+    setNotificationDelegate(null);
   }
 
   /// Set a message handler function which is called when the app is in the

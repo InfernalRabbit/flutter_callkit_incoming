@@ -1,9 +1,9 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
+import 'package:flutter_callkit_incoming/src/notifications/callkit_notification_delegate.dart';
+import 'package:flutter_callkit_incoming/src/notifications/callkit_notification_dispatcher.dart';
 
-import 'callkit_desktop_notification.dart';
 import 'callkit_desktop_platform.dart';
 
 /// Dart-only implementation of the plugin for macOS, Windows and Linux.
@@ -12,8 +12,9 @@ import 'callkit_desktop_platform.dart';
 /// Service), so this implementation keeps an in-memory registry of active calls
 /// and mirrors the mobile event stream:
 ///
-/// * `showCallkitIncoming` registers the call, shows a best-effort OS
-///   notification and emits [CallEventActionCallIncoming].
+/// * `showCallkitIncoming` registers the call, asks the host application's
+///   notification delegate to present it and emits
+///   [CallEventActionCallIncoming].
 /// * `startCall` registers an outgoing call and emits
 ///   [CallEventActionCallStart].
 /// * `endCall` / `endAllCalls` remove calls, dismiss notifications and emit
@@ -22,28 +23,40 @@ import 'callkit_desktop_platform.dart';
 ///   Android).
 /// * `activeCalls` returns the registry contents.
 ///
+/// Notification presentation is owned by the host application. Install a
+/// [CallkitNotificationDelegate] with
+/// `FlutterCallkitIncoming.setNotificationDelegate()`. Without one the
+/// registry and event stream keep working; only the OS notification is missing.
+///
 /// All state is process-local: a hot restart or app relaunch starts with an
 /// empty registry, and nothing is persisted to disk.
 class CallkitDesktopController implements CallkitDesktopPlatform {
-  /// Creates a controller with an optional notification backend.
+  /// Creates a controller.
   ///
-  /// [notification] exists so tests (and hosts that prefer another
-  /// notification transport) can replace the local_notifier implementation.
-  CallkitDesktopController({CallkitDesktopNotification? notification})
-      : _notification =
-            notification ?? LocalNotifierCallkitDesktopNotification() {
-    _notification.onTap = _handleNotificationTap;
+  /// [notifications] defaults to the process-wide
+  /// [CallkitNotificationDispatcher.instance]. Tests pass their own dispatcher
+  /// to install an isolated fake delegate.
+  CallkitDesktopController({CallkitNotificationDispatcher? notifications})
+      : _notifications =
+            notifications ?? CallkitNotificationDispatcher.instance {
+    _actionSubscription = _notifications.actions.listen(
+      (CallkitNotificationAction action) {
+        unawaited(_handleNotificationAction(action));
+      },
+    );
   }
 
   /// Shared instance used by the public API on desktop.
   static final CallkitDesktopController instance = CallkitDesktopController();
 
-  final CallkitDesktopNotification _notification;
+  final CallkitNotificationDispatcher _notifications;
 
   final Map<String, _DesktopCall> _calls = <String, _DesktopCall>{};
 
   final StreamController<CallEvent?> _events =
       StreamController<CallEvent?>.broadcast();
+
+  StreamSubscription<CallkitNotificationAction>? _actionSubscription;
 
   bool _silenceEvents = false;
   bool _registered = false;
@@ -65,13 +78,8 @@ class CallkitDesktopController implements CallkitDesktopPlatform {
     final call = _DesktopCall(params);
     _calls[params.id] = call;
 
-    await _notificationQuietly(
-      () => _notification.show(
-        params.id,
-        params,
-        kind: CallkitDesktopNotificationKind.incoming,
-      ),
-    );
+    await _notifications
+        .showIncoming(callkitNotificationCallFromParams(params));
     _emit(CallEventActionCallIncoming(_snapshot(call)));
   }
 
@@ -79,19 +87,13 @@ class CallkitDesktopController implements CallkitDesktopPlatform {
   Future<void> showMissCallNotification(CallKitParams params) async {
     // A missed call is no longer an active/ringing call.
     _calls.remove(params.id);
-    await _notificationQuietly(() => _notification.hide(params.id));
-    await _notificationQuietly(
-      () => _notification.show(
-        params.id,
-        params,
-        kind: CallkitDesktopNotificationKind.missedCall,
-      ),
-    );
+    await _notifications.cancel(params.id);
+    await _notifications.showMissed(callkitNotificationCallFromParams(params));
   }
 
   @override
   Future<void> hideCallkitIncoming(CallKitParams params) {
-    return _notificationQuietly(() => _notification.hide(params.id));
+    return _notifications.cancel(params.id);
   }
 
   @override
@@ -127,7 +129,7 @@ class CallkitDesktopController implements CallkitDesktopPlatform {
   @override
   Future<void> endCall(String id) async {
     final call = _calls.remove(id);
-    await _notificationQuietly(() => _notification.hide(id));
+    await _notifications.cancel(id);
     if (call == null) {
       // Unknown id: match the mobile plugins and stay silent.
       return;
@@ -143,7 +145,7 @@ class CallkitDesktopController implements CallkitDesktopPlatform {
     }
     // The ringing banner is stale once the call is connected. There is no
     // ongoing-call notification on desktop.
-    await _notificationQuietly(() => _notification.hide(id));
+    await _notifications.cancel(id);
     if (call != null) {
       _emit(CallEventActionCallConnected(id));
     }
@@ -153,7 +155,7 @@ class CallkitDesktopController implements CallkitDesktopPlatform {
   Future<void> endAllCalls() async {
     final calls = _calls.values.toList(growable: false);
     _calls.clear();
-    await _notificationQuietly(_notification.hideAll);
+    await _notifications.cancelAll();
     for (final call in calls) {
       _emit(_endEvent(call));
     }
@@ -185,7 +187,11 @@ class CallkitDesktopController implements CallkitDesktopPlatform {
   /// Releases the event stream. Only used by tests; the app-facing singleton
   /// lives for the whole process.
   Future<void> dispose() async {
-    await _notificationQuietly(_notification.dispose);
+    final StreamSubscription<CallkitNotificationAction>? subscription =
+        _actionSubscription;
+    _actionSubscription = null;
+    await subscription?.cancel();
+    await _notifications.cancelAll();
     await _events.close();
   }
 
@@ -196,15 +202,52 @@ class CallkitDesktopController implements CallkitDesktopPlatform {
     return CallEventActionCallDecline(_snapshot(call));
   }
 
-  void _handleNotificationTap(String id) {
-    final call = _calls[id];
-    if (call == null || call.connected) {
+  Future<void> _handleNotificationAction(
+      CallkitNotificationAction action) async {
+    final _DesktopCall? call = _calls[action.callId];
+    if (call == null) {
       return;
     }
-    // Desktop has no native accept/decline buttons, so a click is a request to
-    // bring the call to the front: re-emit the incoming event and let the app
-    // show its own call UI.
-    _emit(CallEventActionCallIncoming(_snapshot(call)));
+    switch (action.type) {
+      case CallkitNotificationActionType.accept:
+        await _acceptCall(call);
+        break;
+      case CallkitNotificationActionType.decline:
+        await _declineCall(call);
+        break;
+      case CallkitNotificationActionType.end:
+        await endCall(call.id);
+        break;
+      case CallkitNotificationActionType.click:
+        // Desktop has no native accept/decline buttons, so a click is a
+        // request to bring the call to the front: re-emit the incoming event
+        // and let the app show its own call UI.
+        if (!call.connected) {
+          _emit(CallEventActionCallIncoming(_snapshot(call)));
+        }
+        break;
+    }
+  }
+
+  Future<void> _acceptCall(_DesktopCall call) async {
+    if (!identical(_calls[call.id], call) || call.isAccepted) {
+      return;
+    }
+    call.connected = true;
+    await _notifications.cancel(call.id);
+    if (!identical(_calls[call.id], call)) {
+      return;
+    }
+    _emit(CallEventActionCallAccept(_snapshot(call)));
+  }
+
+  Future<void> _declineCall(_DesktopCall call) async {
+    if (!identical(_calls[call.id], call) || call.isAccepted) {
+      return;
+    }
+    _calls.remove(call.id);
+    await _notifications.cancel(call.id);
+    _emit(CallEventActionCallDecline(_snapshot(call)));
   }
 
   void _emit(CallEvent event) {
@@ -238,18 +281,6 @@ class CallkitDesktopController implements CallkitDesktopPlatform {
       ios: params.ios,
     );
   }
-
-  Future<void> _notificationQuietly(Future<void> Function() action) async {
-    try {
-      await action();
-    } catch (error) {
-      // Notifications are best effort; a failure must never break the call
-      // registry or the Dart-facing futures.
-      debugPrint(
-        '[flutter_callkit_incoming] desktop notification error: $error',
-      );
-    }
-  }
 }
 
 class _DesktopCall {
@@ -261,6 +292,8 @@ class _DesktopCall {
   bool connected = false;
   bool muted = false;
   bool onHold = false;
+
+  String get id => params.id;
 
   bool get isAccepted => connected || params.isAccepted;
 }
