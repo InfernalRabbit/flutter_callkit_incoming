@@ -60,8 +60,7 @@ class BrowserCallkitWebNotificationBridge
       return 'unsupported';
     }
     try {
-      final JSString result =
-          await web.Notification.requestPermission().toDart;
+      final JSString result = await web.Notification.requestPermission().toDart;
       return result.toDart;
     } catch (_) {
       // Browsers may reject the promise when it is not triggered by a user

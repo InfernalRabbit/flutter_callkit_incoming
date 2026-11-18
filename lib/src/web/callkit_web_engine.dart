@@ -52,8 +52,8 @@ class CallkitWebEngine {
   CallkitWebEngine({
     CallkitWebNotificationBridge? notificationBridge,
     CallkitWebClock? clock,
-  })  : _notifications =
-            notificationBridge ?? const UnsupportedCallkitWebNotificationBridge(),
+  })  : _notifications = notificationBridge ??
+            const UnsupportedCallkitWebNotificationBridge(),
         _clock = clock ?? const RealCallkitWebClock();
 
   /// Default ring duration used when [CallKitParams.duration] is not set.

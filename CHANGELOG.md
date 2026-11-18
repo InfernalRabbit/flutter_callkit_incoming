@@ -3,9 +3,16 @@
 ### Desktop support (macOS / Windows / Linux)
 * Added a Dart-only desktop implementation registered through `dartPluginClass` for macOS, Windows and Linux. The existing Android/iOS MethodChannel implementations are unchanged.
 * Added desktop implementations of `showCallkitIncoming`, `startCall`, `endCall`, `endAllCalls`, `activeCalls`, `setCallConnected`, `muteCall`/`isMuted`, `holdCall`, `hideCallkitIncoming`, `showMissCallNotification`, `silenceEvents`/`unsilenceEvents` and `onEvent`, backed by an in-memory call registry.
-* Native OS notifications are best effort via `local_notifier` (`NSUserNotification` on macOS, WinToast on Windows, libnotify on Linux). Notification failures are logged and never break the call registry.
+* Native OS notifications are best effort via `local_notifier` (NSUserNotification on macOS, WinToast on Windows, libnotify on Linux). Notification failures are logged and never break the call registry.
 * Desktop limitations: no native call UI, ringing audio, call history, or accept/decline notification buttons. Clicking a ringing notification re-emits `ACTION_CALL_INCOMING`; apps drive accept/decline from their own UI. `onBackgroundMessage`, `acceptCallHandle` and `invokeFlutter` are no-ops on desktop.
 * Added unit tests for the desktop registry/event flow and a public-API round-trip test.
+
+**Web support (JavaScript and WebAssembly)**
+* Added a Flutter web implementation (`lib/flutter_callkit_incoming_web.dart`, registered through the `web` platform in `pubspec.yaml`) that keeps the existing public Dart API. It is implemented with `package:web` and `dart:js_interop`, so `flutter build web --wasm` compiles.
+* Calls are tracked in memory and surfaced with the browser Notification API: `showCallkitIncoming`, `startCall`, `hideCallkitIncoming`, `endCall`, `endAllCalls`, `activeCalls`, `muteCall`, `holdCall`, `isMuted`, `setCallConnected`, `silenceEvents` and `onEvent` follow Android semantics. Clicking a notification accepts, dismissing declines, and ring timeout emits `ACTION_CALL_TIMEOUT`.
+* If the Notification API is unavailable or permission is denied, the call state machine and event stream keep working without notifications.
+* Web limitations: no CallKit/ConnectionService UI, no background ringing, no notification action buttons and no web push.
+* Tests: VM unit tests for web engine/channel host plus browser tests (`flutter test --platform chrome [--wasm]`).
 
 ## 3.1.6
 
