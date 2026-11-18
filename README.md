@@ -34,6 +34,7 @@ Our top sponsors are shown below!
     - [Android Configuration](#android)
     - [iOS Configuration](#ios)
     - [Swift Package Manager (SPM) Support](#swift-package-manager-spm-support-flutter-324)
+    - [Desktop (macOS / Windows / Linux)](#desktop-macos--windows--linux)
   - [3. Usage](#3-usage)
 - [📋 Properties](#-properties)
 - [📱 Pushkit Setup](#-pushkit---received-voip-and-wake-app-from-terminated-state-ios-only)
@@ -45,6 +46,7 @@ Our top sponsors are shown below!
 - Start an outgoing call
 - Custom UI Android/Callkit for iOS
 - Example using Pushkit/VoIP for iOS
+- macOS, Windows and Linux support (Dart-only; in-memory call registry plus OS notifications)
 
 > [!WARNING]
 > ### iOS: ONLY WORKING ON REAL DEVICE
@@ -117,6 +119,54 @@ flutter config --enable-swift-package-manager
 
 > [!IMPORTANT]
 > Swift Package Manager is highly recommended for modern Flutter projects as CocoaPods is in maintenance mode and will become read-only in December 2026.
+
+#### Desktop (macOS / Windows / Linux)
+
+Desktop support is implemented in Dart on top of
+[`local_notifier`](https://pub.dev/packages/local_notifier). There is no
+CallKit/ConnectionService equivalent outside Android and iOS, so the plugin
+keeps calls in an in-memory registry and shows a best-effort OS notification
+instead of a native call screen. The platform entries are declared in this
+package with `dartPluginClass: FlutterCallkitIncomingDesktop`, so no extra
+configuration or native code is required in the host app.
+
+Platform notes:
+
+- **macOS**: notifications use `NSUserNotification` (deprecated by Apple but
+  still functional). Allow notifications for the app in System Settings >
+  Notifications; the first notification can trigger the system permission
+  prompt.
+- **Windows**: toast notifications need an AppUserModelID backed by a Start
+  Menu shortcut. The plugin asks `local_notifier` to create that shortcut on
+  first use.
+- **Linux**: requires `libnotify` (`sudo apt-get install libnotify-dev`) and
+  a running notification daemon.
+
+Desktop behaviour:
+
+- `showCallkitIncoming` / `showMissCallNotification` register the call and
+  show or replace its notification; `hideCallkitIncoming`, `endCall` and
+  `endAllCalls` dismiss it.
+- `activeCalls` returns the in-memory registry. It is empty after a restart:
+  desktop calls are not persisted and there is no call history integration.
+- `onEvent` emits `ACTION_CALL_INCOMING`, `ACTION_CALL_START`,
+  `ACTION_CALL_ACCEPT` / `ACTION_CALL_DECLINE` (depending on whether the call
+  was answered), `ACTION_CALL_CONNECTED`, `ACTION_CALL_ENDED`,
+  `ACTION_CALL_TOGGLE_MUTE` and `ACTION_CALL_TOGGLE_HOLD`.
+- Clicking a ringing notification re-emits `ACTION_CALL_INCOMING` so the app
+  can bring its own call UI to the front. Notifications have no
+  accept/decline buttons: the app must drive those actions from its own UI.
+- `onBackgroundMessage`, `acceptCallHandle`, `invokeFlutter` and
+  `getDevicePushTokenVoIP` are mobile-only; on desktop they are no-ops (the
+  token getter returns `null`).
+- `requestNotificationPermission` returns `true`;
+  `requestFullIntentPermission` and `canUseFullScreenIntent` return `false`
+  (Android-only).
+
+> [!NOTE]
+> Desktop does not provide ringing audio, vibration, audio-session handling or
+> CallKit-style accept/decline actions. Use your app's own audio and UI layer,
+> and treat the notification as advisory.
 
 ### 3. Usage
 

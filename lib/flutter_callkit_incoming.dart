@@ -6,6 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'entities/entities.dart';
+import 'src/desktop/callkit_desktop_factory.dart';
+import 'src/desktop/callkit_desktop_platform.dart';
+
+// Flutter's generated desktop plugin registrant looks up
+// FlutterCallkitIncomingDesktop on this library.
+export 'src/desktop/registration.dart';
 
 /// Instance to use library functions.
 /// * showCallkitIncoming(dynamic)
@@ -13,6 +19,10 @@ import 'entities/entities.dart';
 /// * endCall(dynamic)
 /// * endAllCalls()
 /// * callConnected(dynamic)
+///
+/// The API is identical on every platform. On macOS, Windows and Linux a
+/// Dart-only implementation keeps the calls in an in-memory registry and shows
+/// OS notifications instead of a native CallKit/ConnectionService call UI.
 
 typedef BackgroundMessageHandler = Future<void> Function(CallEvent callEvent);
 typedef ActionEvent = void Function(Map<dynamic, dynamic> data);
@@ -51,10 +61,30 @@ class FlutterCallkitIncoming {
   static const EventChannel _eventChannel =
       EventChannel('flutter_callkit_incoming_events');
 
+  static CallkitDesktopPlatform? _desktopPlatform;
+  static bool _desktopPlatformResolved = false;
+
+  /// Dart-only backend used on macOS, Windows and Linux.
+  ///
+  /// It is `null` on Android, iOS and web, where the existing native
+  /// MethodChannel/EventChannel handlers remain in charge.
+  static CallkitDesktopPlatform? get _desktop {
+    if (!_desktopPlatformResolved) {
+      _desktopPlatform = callkitDesktopPlatform();
+      _desktopPlatformResolved = true;
+    }
+    return _desktopPlatform;
+  }
+
   /// Set a message handler function which is called when the app is in the
   /// background or terminated.
   static Future<void> onBackgroundMessage(
       BackgroundMessageHandler handler) async {
+    if (_desktop != null) {
+      // Background isolates are an Android/iOS feature. Desktop call state is
+      // process-local, so there is nothing to register.
+      return;
+    }
     final CallbackHandle pluginHandle = PluginUtilities.getCallbackHandle(
       _flutterCallkitIncomingCallbackDispatcher,
     )!;
@@ -83,11 +113,21 @@ class FlutterCallkitIncoming {
   /// Event.ACTION_CALL_TOGGLE_AUDIO_SESSION - only iOS
   /// Event.DID_UPDATE_DEVICE_PUSH_TOKEN_VOIP - only iOS
   /// }
-  static Stream<CallEvent?> get onEvent =>
-      _eventChannel.receiveBroadcastStream().map(_receiveCallEvent);
+  static Stream<CallEvent?> get onEvent {
+    final desktop = _desktop;
+    if (desktop != null) {
+      return desktop.onEvent;
+    }
+    return _eventChannel.receiveBroadcastStream().map(_receiveCallEvent);
+  }
 
   /// Handle accept call from background when the app was killed.
   static void acceptCallHandle(ActionEvent handler) {
+    if (_desktop != null) {
+      // No native call screen on desktop, so there is no native accept action
+      // to bridge back into Dart.
+      return;
+    }
     final rawHandle = PluginUtilities.getCallbackHandle(handler)?.toRawHandle();
     _channel.invokeMethod('setAcceptCallHandle', [
       rawHandle,
@@ -102,6 +142,9 @@ class FlutterCallkitIncoming {
 
   /// Send data to Flutter from background when the app was killed.
   static void invokeFlutter(Callback callback) {
+    if (_desktop != null) {
+      return;
+    }
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'invokeFlutter') {
         callback(call.arguments);
@@ -119,18 +162,33 @@ class FlutterCallkitIncoming {
   /// Show Callkit Incoming.
   /// On iOS, using Callkit. On Android, using a custom UI.
   static Future<void> showCallkitIncoming(CallKitParams params) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      await desktop.showCallkitIncoming(params);
+      return;
+    }
     await _channel.invokeMethod("showCallkitIncoming", params.toJson());
   }
 
   /// Show Miss Call Notification.
   /// Only Android
   static Future<void> showMissCallNotification(CallKitParams params) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      await desktop.showMissCallNotification(params);
+      return;
+    }
     await _channel.invokeMethod("showMissCallNotification", params.toJson());
   }
 
   /// Hide notification call for Android.
   /// Only Android
   static Future<void> hideCallkitIncoming(CallKitParams params) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      await desktop.hideCallkitIncoming(params);
+      return;
+    }
     await _channel.invokeMethod("hideCallkitIncoming", params.toJson());
   }
 
@@ -138,6 +196,11 @@ class FlutterCallkitIncoming {
   /// On iOS, using Callkit(create a history into the Phone app).
   /// On Android, Nothing(only callback event listener).
   static Future<void> startCall(CallKitParams params) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      await desktop.startCall(params);
+      return;
+    }
     await _channel.invokeMethod("startCall", params.toJson());
   }
 
@@ -145,6 +208,11 @@ class FlutterCallkitIncoming {
   /// On iOS, using Callkit(update the ongoing call ui).
   /// On Android, Nothing(only callback event listener).
   static Future<void> muteCall(String id, {bool isMuted = true}) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      await desktop.muteCall(id, isMuted: isMuted);
+      return;
+    }
     await _channel.invokeMethod("muteCall", {'id': id, 'isMuted': isMuted});
   }
 
@@ -152,6 +220,10 @@ class FlutterCallkitIncoming {
   /// On iOS, using Callkit(update call ui).
   /// On Android, Nothing(only callback event listener).
   static Future<bool> isMuted(String id) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      return desktop.isMuted(id);
+    }
     return (await _channel.invokeMethod("isMuted", {'id': id})) as bool? ??
         false;
   }
@@ -160,6 +232,11 @@ class FlutterCallkitIncoming {
   /// On iOS, using Callkit(update the ongoing call ui).
   /// On Android, Nothing(only callback event listener).
   static Future<void> holdCall(String id, {bool isOnHold = true}) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      await desktop.holdCall(id, isOnHold: isOnHold);
+      return;
+    }
     await _channel.invokeMethod("holdCall", {'id': id, 'isOnHold': isOnHold});
   }
 
@@ -167,6 +244,11 @@ class FlutterCallkitIncoming {
   /// On iOS, using Callkit(update a history into the Phone app).
   /// On Android, Nothing(only callback event listener).
   static Future<void> endCall(String id) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      await desktop.endCall(id);
+      return;
+    }
     await _channel.invokeMethod("endCall", {'id': id});
   }
 
@@ -174,11 +256,21 @@ class FlutterCallkitIncoming {
   /// On iOS, using Callkit(update a history into the Phone app).
   /// On Android, Nothing(only callback event listener).
   static Future<void> setCallConnected(String id) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      await desktop.setCallConnected(id);
+      return;
+    }
     await _channel.invokeMethod("callConnected", {'id': id});
   }
 
   /// End all calls.
   static Future<void> endAllCalls() async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      await desktop.endAllCalls();
+      return;
+    }
     await _channel.invokeMethod("endAllCalls");
   }
 
@@ -186,6 +278,10 @@ class FlutterCallkitIncoming {
   /// On iOS: return active calls from Callkit.
   /// On Android: only return last call
   static Future<List<CallKitParams>> activeCalls() async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      return desktop.activeCalls();
+    }
     final result = await _channel.invokeMethod("activeCalls");
     if (result is! List) {
       return [];
@@ -200,34 +296,58 @@ class FlutterCallkitIncoming {
   /// On iOS: return deviceToken for VoIP.
   /// On Android: return Empty
   static Future<String?> getDevicePushTokenVoIP() async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      return desktop.getDevicePushTokenVoIP();
+    }
     return await _channel.invokeMethod("getDevicePushTokenVoIP");
   }
 
   /// Silence CallKit events
   static Future<bool> silenceEvents() async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      return desktop.setSilenceEvents(true);
+    }
     return await _channel.invokeMethod("silenceEvents", true);
   }
 
   /// Unsilence CallKit events
   static Future<bool> unsilenceEvents() async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      return desktop.setSilenceEvents(false);
+    }
     return await _channel.invokeMethod("silenceEvents", false);
   }
 
   /// Request permission show notification for Android(13)
   /// Only Android: show request permission post notification for Android 13+
   static Future<bool> requestNotificationPermission(dynamic data) async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      return desktop.requestNotificationPermission(data);
+    }
     return await _channel.invokeMethod("requestNotificationPermission", data);
   }
 
   /// Request permission show notification for Android(14)+
   /// Only Android: show request permission for ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT
   static Future<bool> requestFullIntentPermission() async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      return desktop.requestFullIntentPermission();
+    }
     return await _channel.invokeMethod("requestFullIntentPermission");
   }
 
   /// Check can use full screen intent for Android(14)+
   /// Only Android: canUseFullScreenIntent permission for ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT
   static Future<bool> canUseFullScreenIntent() async {
+    final desktop = _desktop;
+    if (desktop != null) {
+      return desktop.canUseFullScreenIntent();
+    }
     return await _channel.invokeMethod("canUseFullScreenIntent");
   }
 

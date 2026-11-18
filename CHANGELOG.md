@@ -1,3 +1,12 @@
+## Unreleased
+
+### Desktop support (macOS / Windows / Linux)
+* Added a Dart-only desktop implementation registered through `dartPluginClass` for macOS, Windows and Linux. The existing Android/iOS MethodChannel implementations are unchanged.
+* Added desktop implementations of `showCallkitIncoming`, `startCall`, `endCall`, `endAllCalls`, `activeCalls`, `setCallConnected`, `muteCall`/`isMuted`, `holdCall`, `hideCallkitIncoming`, `showMissCallNotification`, `silenceEvents`/`unsilenceEvents` and `onEvent`, backed by an in-memory call registry.
+* Native OS notifications are best effort via `local_notifier` (`NSUserNotification` on macOS, WinToast on Windows, libnotify on Linux). Notification failures are logged and never break the call registry.
+* Desktop limitations: no native call UI, ringing audio, call history, or accept/decline notification buttons. Clicking a ringing notification re-emits `ACTION_CALL_INCOMING`; apps drive accept/decline from their own UI. `onBackgroundMessage`, `acceptCallHandle` and `invokeFlutter` are no-ops on desktop.
+* Added unit tests for the desktop registry/event flow and a public-API round-trip test.
+
 ## 3.1.6
 
 Hotfix release. Low-risk corrections only — no API changes.
