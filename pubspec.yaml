@@ -19,8 +19,15 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
   json_annotation: ^4.9.0
+<<<<<<< HEAD
   local_notifier: ^0.1.6
+||||||| f9a64e4
+=======
+  web: ^1.0.0
+>>>>>>> feat/web-wasm
 
 dev_dependencies:
   build_runner: ^2.7.0
@@ -45,6 +52,7 @@ flutter:
         pluginClass: FlutterCallkitIncomingPlugin
       ios:
         pluginClass: FlutterCallkitIncomingPlugin
+<<<<<<< HEAD
       # Desktop platforms are implemented in Dart (see
       # lib/flutter_callkit_incoming_desktop.dart) on top of the
       # cross-platform local_notifier package. No native plugin code ships
@@ -55,6 +63,12 @@ flutter:
         dartPluginClass: FlutterCallkitIncomingDesktop
       linux:
         dartPluginClass: FlutterCallkitIncomingDesktop
+||||||| f9a64e4
+=======
+      web:
+        pluginClass: FlutterCallkitIncomingWeb
+        fileName: flutter_callkit_incoming_web.dart
+>>>>>>> feat/web-wasm
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:
