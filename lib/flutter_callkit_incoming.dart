@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'entities/entities.dart';
-import 'src/notifications/callkit_notification_delegate.dart';
 import 'src/desktop/callkit_desktop_factory.dart';
 import 'src/desktop/callkit_desktop_platform.dart';
 
