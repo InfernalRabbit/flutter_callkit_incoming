@@ -9,6 +9,7 @@ build/
 pubspec.lock
 
 example/ios/Podfile.lock
+example/macos/Podfile.lock
 example/pubspec.lock
 
 .idea/*
