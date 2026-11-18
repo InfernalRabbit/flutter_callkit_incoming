@@ -81,7 +81,8 @@ void main() {
       CallEventConstants.actionCallIncoming,
       CallEventConstants.actionCallAccept,
     ]);
-    expect((events.last['body'] as Map<dynamic, dynamic>)['isAccepted'], isTrue);
+    expect(
+        (events.last['body'] as Map<dynamic, dynamic>)['isAccepted'], isTrue);
     expect(engine.activeCallParams.single.isAccepted, isTrue);
     expect(bridge.shown, isEmpty);
     // The ring timeout must not fire after the call was accepted.
@@ -153,8 +154,7 @@ void main() {
 
   test('hideCallkitIncoming clears the call and emits ended', () async {
     await engine.handleMethodCall('showCallkitIncoming', params().toJson());
-    await engine.handleMethodCall(
-        'hideCallkitIncoming', params().toJson());
+    await engine.handleMethodCall('hideCallkitIncoming', params().toJson());
     await flush();
 
     expect(events.last['event'], CallEventConstants.actionCallEnded);
@@ -186,8 +186,8 @@ void main() {
   });
 
   test('startCall emits ACTION_CALL_START without a notification', () async {
-    final Object? result = await engine.handleMethodCall(
-        'startCall', params().toJson());
+    final Object? result =
+        await engine.handleMethodCall('startCall', params().toJson());
     await flush();
 
     expect(result, isTrue);
@@ -200,8 +200,8 @@ void main() {
     await engine.handleMethodCall('showCallkitIncoming', params().toJson());
     await flush();
 
-    await engine.handleMethodCall(
-        'callConnected', <String, dynamic>{'id': 'call-1'});
+    await engine
+        .handleMethodCall('callConnected', <String, dynamic>{'id': 'call-1'});
     await flush();
 
     expect(events.last['event'], CallEventConstants.actionCallConnected);
@@ -218,9 +218,8 @@ void main() {
     bridge.click('call-2');
     await flush();
 
-    final List<Map<String, dynamic>> calls =
-        (await engine.handleMethodCall('activeCalls', null))
-            as List<Map<String, dynamic>>;
+    final List<Map<String, dynamic>> calls = (await engine.handleMethodCall(
+        'activeCalls', null)) as List<Map<String, dynamic>>;
 
     expect(calls.map((Map<String, dynamic> c) => c['id']), <String>[
       'call-1',
@@ -236,16 +235,16 @@ void main() {
     await flush();
 
     expect(
-      await engine.handleMethodCall(
-          'isMuted', <String, dynamic>{'id': 'call-1'}),
+      await engine
+          .handleMethodCall('isMuted', <String, dynamic>{'id': 'call-1'}),
       isFalse,
     );
 
     await engine.handleMethodCall(
         'muteCall', <String, dynamic>{'id': 'call-1', 'isMuted': true});
     expect(
-      await engine.handleMethodCall(
-          'isMuted', <String, dynamic>{'id': 'call-1'}),
+      await engine
+          .handleMethodCall('isMuted', <String, dynamic>{'id': 'call-1'}),
       isTrue,
     );
     await engine.handleMethodCall(
@@ -269,8 +268,7 @@ void main() {
     expect(events, isEmpty);
 
     await engine.handleMethodCall('silenceEvents', false);
-    await engine.handleMethodCall(
-        'endCall', <String, dynamic>{'id': 'call-1'});
+    await engine.handleMethodCall('endCall', <String, dynamic>{'id': 'call-1'});
     await flush();
     expect(events.single['event'], CallEventConstants.actionCallDecline);
   });
@@ -278,8 +276,8 @@ void main() {
   test('denied notification permission keeps the call state machine working',
       () async {
     bridge.permissionValue = 'denied';
-    final Object? result = await engine.handleMethodCall(
-        'showCallkitIncoming', params().toJson());
+    final Object? result =
+        await engine.handleMethodCall('showCallkitIncoming', params().toJson());
     await flush();
 
     expect(result, isTrue);
@@ -289,8 +287,8 @@ void main() {
     expect(await engine.handleMethodCall('requestNotificationPermission', null),
         isFalse);
     expect(
-      await engine.handleMethodCall(
-          'endCall', <String, dynamic>{'id': 'call-1'}),
+      await engine
+          .handleMethodCall('endCall', <String, dynamic>{'id': 'call-1'}),
       isTrue,
     );
   });
@@ -313,7 +311,8 @@ void main() {
     expect(headless.notificationPermission, 'unsupported');
   });
 
-  test('showMissCallNotification emits a callback event when clicked', () async {
+  test('showMissCallNotification emits a callback event when clicked',
+      () async {
     final bool shown = await engine.handleMethodCall(
         'showMissCallNotification', params().toJson()) as bool;
 
@@ -328,8 +327,8 @@ void main() {
 
   test('unknown methods resolve to null', () async {
     expect(await engine.handleMethodCall('setAudioRoute', null), isNull);
-    expect(await engine.handleMethodCall('endNativeSubsystemOnly', null),
-        isNull);
+    expect(
+        await engine.handleMethodCall('endNativeSubsystemOnly', null), isNull);
   });
 
   test('dispose releases pending timers and notifications', () async {
@@ -344,7 +343,8 @@ void main() {
 }
 
 class FakeNotificationBridge implements CallkitWebNotificationBridge {
-  FakeNotificationBridge({this.isSupported = true, this.isSecureContext = true});
+  FakeNotificationBridge(
+      {this.isSupported = true, this.isSecureContext = true});
 
   @override
   final bool isSupported;
@@ -357,8 +357,7 @@ class FakeNotificationBridge implements CallkitWebNotificationBridge {
   final Map<String, CallkitWebNotification> shown =
       <String, CallkitWebNotification>{};
   final Map<String, void Function()> clicks = <String, void Function()>{};
-  final Map<String, void Function()> dismissals =
-      <String, void Function()>{};
+  final Map<String, void Function()> dismissals = <String, void Function()>{};
   final List<String> closed = <String>[];
   int permissionRequestCount = 0;
 

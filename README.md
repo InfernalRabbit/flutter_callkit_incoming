@@ -35,6 +35,7 @@ Our top sponsors are shown below!
     - [iOS Configuration](#ios)
     - [Swift Package Manager (SPM) Support](#swift-package-manager-spm-support-flutter-324)
   - [3. Usage](#3-usage)
+- [🌐 Web (including WASM)](#-web-including-wasm)
 - [📋 Properties](#-properties)
 - [📱 Pushkit Setup](#-pushkit---received-voip-and-wake-app-from-terminated-state-ios-only)
 - [🎯 Demo](#-demo)
@@ -45,6 +46,7 @@ Our top sponsors are shown below!
 - Start an outgoing call
 - Custom UI Android/Callkit for iOS
 - Example using Pushkit/VoIP for iOS
+- Web support (browser notifications, JavaScript and WebAssembly targets)
 
 > [!WARNING]
 > ### iOS: ONLY WORKING ON REAL DEVICE
@@ -682,6 +684,91 @@ class MainApplication : Application() {  // or FlutterApplication
 ```
 > **Please check full example:** [Example](https://github.com/hiennguyen92/flutter_callkit_incoming/blob/master/example/android/app/src/main/kotlin/com/example/flutter_callkit_incoming_example/MainActivity.kt
 )
+
+## 🌐 Web (including WASM)
+
+The plugin includes a Flutter web implementation that keeps the same public
+Dart API. It is written with `package:web` and `dart:js_interop` (no
+`dart:html`), so both `flutter build web` and `flutter build web --wasm`
+compile.
+
+The web implementation is a browser approximation of the native plugins. It
+tracks calls in memory and uses the browser Notification API; it is **not**
+CallKit/ConnectionService and cannot ring in the background.
+
+### Behaviour
+
+| Public API | Web behaviour |
+|------------|----------------|
+| `showCallkitIncoming` | Tracks the call, emits `ACTION_CALL_INCOMING` and shows a browser notification (title = caller name, body = handle). |
+| `startCall` | Tracks the outgoing call and emits `ACTION_CALL_START`. No notification is shown. |
+| `hideCallkitIncoming` | Closes the notification, forgets the call and emits `ACTION_CALL_ENDED` (same as the Android implementation). |
+| `endCall` | Emits `ACTION_CALL_ENDED` for accepted calls and `ACTION_CALL_DECLINE` for ringing calls. |
+| `endAllCalls` | Ends every tracked call and closes all notifications. |
+| `activeCalls` | Returns the in-memory calls (the list is empty after a page reload). |
+| `muteCall`, `holdCall`, `isMuted`, `setCallConnected` | Update the in-memory state and emit `ACTION_CALL_TOGGLE_MUTE`, `ACTION_CALL_TOGGLE_HOLD` and `ACTION_CALL_CONNECTED`. |
+| `onEvent` | Same stream and `CallEvent` types as on the native platforms. |
+| `requestNotificationPermission` | Calls `Notification.requestPermission()` and returns whether notifications are granted. Call it from a user gesture. |
+| `silenceEvents`, `unsilenceEvents` | Stop and restart event emission. |
+| `getDevicePushTokenVoIP`, `requestFullIntentPermission`, `canUseFullScreenIntent`, background handlers | Not applicable on the web (null/false/no-op). |
+
+Notification interaction:
+
+- Clicking a call notification accepts the call and emits `ACTION_CALL_ACCEPT`.
+- Dismissing a call notification declines the call and emits
+  `ACTION_CALL_DECLINE`.
+- Ring timeout (`CallKitParams.duration`, 30 000 ms by default) removes the call
+  and emits `ACTION_CALL_TIMEOUT`.
+
+### Usage
+
+Ask for the notification permission once, from a user gesture, and then show
+calls exactly like on the native platforms:
+
+```dart
+final granted = await FlutterCallkitIncoming
+    .requestNotificationPermission(<String, dynamic>{});
+
+FlutterCallkitIncoming.onEvent.listen((event) {
+  // ACTION_CALL_INCOMING, ACTION_CALL_ACCEPT, ACTION_CALL_DECLINE, ...
+});
+
+await FlutterCallkitIncoming.showCallkitIncoming(
+  const CallKitParams(
+    id: 'call-1',
+    nameCaller: 'Alice',
+    handle: 'alice@example.com',
+    type: 0,
+  ),
+);
+```
+
+The web plugin also exposes diagnostics that are useful in debug builds:
+
+```dart
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming_web.dart';
+
+FlutterCallkitIncomingWeb.isNotificationSupported;
+FlutterCallkitIncomingWeb.isSecureContext;
+FlutterCallkitIncomingWeb.notificationPermission; // granted/denied/default/unsupported
+```
+
+### Requirements and limitations
+
+- The page must be served from a secure context (`https://` or
+  `localhost`); browsers reject notifications on plain HTTP origins.
+- Notification permission must be granted. If the Notification API is missing
+  or the permission was denied, calls are still tracked and events are still
+  emitted, but no system notification appears (headless fallback).
+- Notifications only exist while the page is open. There is no service worker
+  integration, so the plugin cannot wake a closed tab, ring in the background
+  or survive a page reload.
+- Notifications do not expose Accept/Decline buttons; the browser does not
+  support `actions` portably for page notifications.
+- No native CallKit UI, audio focus, ringtone or system phone-app integration.
+- Call state is per page load and is not shared between tabs.
+- Web push is not implemented. Deliver the call with your own transport (for
+  example FCM for web) and call `showCallkitIncoming` when a message arrives.
 
 ## 📋 Properties
 

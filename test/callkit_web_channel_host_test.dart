@@ -1,6 +1,3 @@
-import 'dart:async';
-import 'dart:typed_data';
-
 import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/src/web/callkit_web_channel_host.dart';
@@ -168,13 +165,15 @@ void main() {
     host.register();
 
     await invoke('showCallkitIncoming', params().toJson());
-    await invoke('muteCall', <String, dynamic>{'id': 'call-1', 'isMuted': true});
+    await invoke(
+        'muteCall', <String, dynamic>{'id': 'call-1', 'isMuted': true});
     expect(
       await invoke('isMuted', <String, dynamic>{'id': 'call-1'}),
       isTrue,
     );
     expect(
-      await invoke('holdCall', <String, dynamic>{'id': 'call-1', 'isOnHold': true}),
+      await invoke(
+          'holdCall', <String, dynamic>{'id': 'call-1', 'isOnHold': true}),
       isTrue,
     );
   });

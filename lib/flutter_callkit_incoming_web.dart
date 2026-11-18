@@ -36,7 +36,8 @@ class FlutterCallkitIncomingWeb {
   /// Called by the generated web_plugin_registrant.dart; applications do not
   /// need to call this method themselves.
   static void registerWith(Registrar registrar) {
-    registerWithBridge(registrar, bridge: BrowserCallkitWebNotificationBridge());
+    registerWithBridge(registrar,
+        bridge: BrowserCallkitWebNotificationBridge());
   }
 
   /// Registers the web implementation with a custom notification [bridge].

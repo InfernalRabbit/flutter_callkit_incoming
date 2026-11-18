@@ -1,3 +1,25 @@
+## Unreleased
+
+**Web support (JavaScript and WebAssembly)**
+
+* Added a Flutter web implementation (`lib/flutter_callkit_incoming_web.dart`,
+  registered through the `web` platform in `pubspec.yaml`) that keeps the
+  existing public Dart API. It is implemented with `package:web` and
+  `dart:js_interop`, so `flutter build web --wasm` compiles.
+* Calls are tracked in memory and surfaced with the browser Notification API:
+  `showCallkitIncoming`, `startCall`, `hideCallkitIncoming`, `endCall`,
+  `endAllCalls`, `activeCalls`, `muteCall`, `holdCall`, `isMuted`,
+  `setCallConnected`, `silenceEvents` and `onEvent` follow the Android
+  semantics. Clicking a notification accepts the call, dismissing it declines
+  the call, and the ring timeout emits `ACTION_CALL_TIMEOUT`.
+* If the Notification API is unavailable or the permission is denied, the call
+  state machine and the event stream keep working without notifications.
+* Documented web limitations: no CallKit/ConnectionService UI, no background
+  ringing, no notification action buttons and no web push.
+* Tests: `flutter test` unit tests for the web engine and channel host, plus
+  browser tests (`flutter test --platform chrome [--wasm]`) for the web-only
+  code paths.
+
 ## 3.1.6
 
 Hotfix release. Low-risk corrections only — no API changes.
