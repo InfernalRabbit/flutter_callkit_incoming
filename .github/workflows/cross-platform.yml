@@ -27,15 +27,15 @@ jobs:
       - name: Create smoke app
         shell: bash
         run: |
-          flutter create --platforms=${{ runner.os == 'Linux' && 'linux' || 'windows' }} --project-name=callkit_smoke /tmp/callkit_smoke
+          flutter create --platforms=${{ runner.os == 'Linux' && 'linux' || 'windows' }} --project-name=callkit_smoke .smoke
           python - <<'PY'
           from pathlib import Path
-          p = Path('/tmp/callkit_smoke/pubspec.yaml')
+          p = Path('.smoke/pubspec.yaml')
           s = p.read_text()
-          s = s.replace("dependencies:\n  flutter:\n    sdk: flutter\n", "dependencies:\n  flutter:\n    sdk: flutter\n  flutter_callkit_incoming:\n    path: " + str(Path.cwd()) + "\n")
+          s = s.replace("dependencies:\n  flutter:\n    sdk: flutter\n", "dependencies:\n  flutter:\n    sdk: flutter\n  flutter_callkit_incoming:\n    path: " + Path.cwd().as_posix() + "\n")
           p.write_text(s)
           PY
-          cat > /tmp/callkit_smoke/lib/main.dart <<'EOF'
+          cat > .smoke/lib/main.dart <<'EOF'
           import 'package:flutter/material.dart';
           import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 
@@ -44,6 +44,6 @@ jobs:
             FlutterCallkitIncoming.activeCalls();
           }
           EOF
-          cd /tmp/callkit_smoke
+          cd .smoke
           flutter pub get
           flutter build ${{ runner.os == 'Linux' && 'linux' || 'windows' }} --release
