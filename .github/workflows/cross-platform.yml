@@ -1,0 +1,49 @@
+name: cross-platform
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.50.0"
+          channel: stable
+          cache: true
+      - name: Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+      - name: Create smoke app
+        shell: bash
+        run: |
+          flutter create --platforms=${{ runner.os == 'Linux' && 'linux' || 'windows' }} --project-name=callkit_smoke /tmp/callkit_smoke
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('/tmp/callkit_smoke/pubspec.yaml')
+          s = p.read_text()
+          s = s.replace("dependencies:\n  flutter:\n    sdk: flutter\n", "dependencies:\n  flutter:\n    sdk: flutter\n  flutter_callkit_incoming:\n    path: " + str(Path.cwd()) + "\n")
+          p.write_text(s)
+          PY
+          cat > /tmp/callkit_smoke/lib/main.dart <<'EOF'
+          import 'package:flutter/material.dart';
+          import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+
+          void main() {
+            runApp(const MaterialApp(home: Scaffold(body: Text('callkit'))));
+            FlutterCallkitIncoming.activeCalls();
+          }
+          EOF
+          cd /tmp/callkit_smoke
+          flutter pub get
+          flutter build ${{ runner.os == 'Linux' && 'linux' || 'windows' }} --release
